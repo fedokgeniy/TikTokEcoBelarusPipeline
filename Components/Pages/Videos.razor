@@ -10,69 +10,111 @@
 <!-- Фильтры -->
 <div class="row g-2 mb-3">
     <div class="col-md-2">
-        <input class="form-control form-control-sm" placeholder="Мин EcoScore"
+        <input class="form-control form-control-sm" placeholder="Мин EcoScore (0.1–1.0)"
+               type="number" step="0.01" min="0" max="1"
                @bind="_minEco" @bind:event="oninput" />
     </div>
     <div class="col-md-2">
-        <input class="form-control form-control-sm" placeholder="Мин BelarusScore"
+        <input class="form-control form-control-sm" placeholder="Мин BelarusScore (0.1–1.0)"
+               type="number" step="0.01" min="0" max="1"
                @bind="_minBelarus" @bind:event="oninput" />
     </div>
     <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Автор"
+               @bind="_authorFilter" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
         <input type="date" class="form-control form-control-sm"
+               title="Дата публикации — от"
                @bind="_dateFrom" />
     </div>
-    <div class="col-md-2">
-        <button class="btn btn-sm btn-primary w-100" @onclick="LoadAsync">Применить</button>
+    <div class="col-md-1">
+        <button class="btn btn-sm btn-primary w-100" @onclick="() => { _page = 0; _ = LoadAsync(); }">Найти</button>
     </div>
-    <div class="col-md-2">
+    <div class="col-md-1">
         <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сбросить</button>
     </div>
 </div>
 
-<!-- Таблица -->
 @if (_loading)
 {
     <p>Загрузка...</p>
 }
 else
 {
-    <div class="text-muted small mb-2">Найдено: @_total видео</div>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted small">Найдено: @_total видео</span>
+    </div>
+
     <table class="table table-hover table-sm">
         <thead class="table-dark">
             <tr>
                 <th @onclick='() => SetSort("AuthorUniqueId")' style="cursor:pointer">Автор @SortIcon("AuthorUniqueId")</th>
                 <th>Описание</th>
+                <th>Ключевые слова</th>
                 <th @onclick='() => SetSort("EcoScore")' style="cursor:pointer">EcoScore @SortIcon("EcoScore")</th>
                 <th @onclick='() => SetSort("BelarusScore")' style="cursor:pointer">BelarusScore @SortIcon("BelarusScore")</th>
                 <th @onclick='() => SetSort("ViewCount")' style="cursor:pointer">Просмотры @SortIcon("ViewCount")</th>
                 <th @onclick='() => SetSort("LikeCount")' style="cursor:pointer">Лайки @SortIcon("LikeCount")</th>
-                <th @onclick='() => SetSort("CommentCount")' style="cursor:pointer">Комменты @SortIcon("CommentCount")</th>
-                <th @onclick='() => SetSort("FetchedAt")' style="cursor:pointer">Дата @SortIcon("FetchedAt")</th>
+                <th @onclick='() => SetSort("PublishedAt")' style="cursor:pointer">Публикация @SortIcon("PublishedAt")</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
             @foreach (var v in _videos)
             {
                 <tr>
-                    <td><a href="@v.VideoUrl" target="_blank">@@@v.AuthorUniqueId</a></td>
-                    <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
+                    <td><a href="@v.VideoUrl" target="_blank">@@v.AuthorUniqueId</a></td>
+                    <td style="max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
                         title="@v.Description">@v.Description</td>
+                    <td style="max-width:200px">
+                        @foreach (var kw in v.MatchedKeywords.Take(5))
+                        {
+                            <span class="badge bg-info text-dark me-1">@kw</span>
+                        }
+                        @if (v.MatchedKeywords.Length > 5)
+                        {
+                            <span class="text-muted small">+@(v.MatchedKeywords.Length - 5)</span>
+                        }
+                    </td>
                     <td><span class="badge bg-success">@v.EcoScore.ToString("F2")</span></td>
                     <td><span class="badge bg-warning text-dark">@v.BelarusScore.ToString("F2")</span></td>
                     <td>@v.ViewCount.ToString("N0")</td>
                     <td>@v.LikeCount.ToString("N0")</td>
-                    <td>@v.CommentCount.ToString("N0")</td>
-                    <td>@v.FetchedAt.ToString("dd.MM.yyyy")</td>
+                    <td>@(v.PublishedAt?.ToString("dd.MM.yyyy") ?? "—")</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(v)">🗑</button>
+                    </td>
                 </tr>
             }
         </tbody>
     </table>
 
-    <!-- Пагинация -->
     <div class="d-flex gap-2 align-items-center">
         <button class="btn btn-sm btn-outline-primary" @onclick="PrevPage" disabled="@(_page == 0)">←</button>
         <span>Страница @(_page + 1)</span>
         <button class="btn btn-sm btn-outline-primary" @onclick="NextPage" disabled="@(!_hasMore)">→</button>
+    </div>
+}
+
+<!-- Модалка подтверждения удаления -->
+@if (_deleteTarget != null)
+{
+    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">Удалить видео?</h6>
+                </div>
+                <div class="modal-body small">
+                    @@_deleteTarget.AuthorUniqueId — @_deleteTarget.Description[..Math.Min(60, _deleteTarget.Description.Length)]...
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteConfirmed">Удалить</button>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => _deleteTarget = null">Отмена</button>
+                </div>
+            </div>
+        </div>
     </div>
 }
 
@@ -84,12 +126,15 @@ else
     bool _hasMore;
     const int PageSize = 20;
 
-    string _sortField = "FetchedAt";
+    string _sortField = "PublishedAt";
     bool _sortDesc    = true;
 
-    double? _minEco;
-    double? _minBelarus;
+    decimal? _minEco;
+    decimal? _minBelarus;
+    string?  _authorFilter;
     DateTime? _dateFrom;
+
+    Video? _deleteTarget;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -100,25 +145,26 @@ else
         var query = Db.Videos.AsQueryable();
 
         if (_minEco.HasValue)
-            query = query.Where(v => (double)v.EcoScore >= _minEco.Value);
+            query = query.Where(v => v.EcoScore >= _minEco.Value);
         if (_minBelarus.HasValue)
-            query = query.Where(v => (double)v.BelarusScore >= _minBelarus.Value);
+            query = query.Where(v => v.BelarusScore >= _minBelarus.Value);
+        if (!string.IsNullOrWhiteSpace(_authorFilter))
+            query = query.Where(v => v.AuthorUniqueId.Contains(_authorFilter));
         if (_dateFrom.HasValue)
-            query = query.Where(v => v.FetchedAt >= _dateFrom.Value);
+            query = query.Where(v => v.PublishedAt >= _dateFrom.Value);
 
-        _total = await query.CountAsync();
+        _total   = await query.CountAsync();
         _hasMore = (_page + 1) * PageSize < _total;
 
         query = _sortField switch
         {
-            "EcoScore"       => _sortDesc ? query.OrderByDescending(v => v.EcoScore)      : query.OrderBy(v => v.EcoScore),
-            "BelarusScore"   => _sortDesc ? query.OrderByDescending(v => v.BelarusScore)  : query.OrderBy(v => v.BelarusScore),
-            "ViewCount"      => _sortDesc ? query.OrderByDescending(v => v.ViewCount)     : query.OrderBy(v => v.ViewCount),
-            "LikeCount"      => _sortDesc ? query.OrderByDescending(v => v.LikeCount)     : query.OrderBy(v => v.LikeCount),
-            "CommentCount"   => _sortDesc ? query.OrderByDescending(v => v.CommentCount)  : query.OrderBy(v => v.CommentCount),
-            "FetchedAt"      => _sortDesc ? query.OrderByDescending(v => v.FetchedAt)     : query.OrderBy(v => v.FetchedAt),
-            "AuthorUniqueId" => _sortDesc ? query.OrderByDescending(v => v.AuthorUniqueId): query.OrderBy(v => v.AuthorUniqueId),
-            _                => query.OrderByDescending(v => v.FetchedAt)
+            "EcoScore"       => _sortDesc ? query.OrderByDescending(v => v.EcoScore)       : query.OrderBy(v => v.EcoScore),
+            "BelarusScore"   => _sortDesc ? query.OrderByDescending(v => v.BelarusScore)   : query.OrderBy(v => v.BelarusScore),
+            "ViewCount"      => _sortDesc ? query.OrderByDescending(v => v.ViewCount)      : query.OrderBy(v => v.ViewCount),
+            "LikeCount"      => _sortDesc ? query.OrderByDescending(v => v.LikeCount)      : query.OrderBy(v => v.LikeCount),
+            "PublishedAt"    => _sortDesc ? query.OrderByDescending(v => v.PublishedAt)    : query.OrderBy(v => v.PublishedAt),
+            "AuthorUniqueId" => _sortDesc ? query.OrderByDescending(v => v.AuthorUniqueId) : query.OrderBy(v => v.AuthorUniqueId),
+            _                => query.OrderByDescending(v => v.PublishedAt)
         };
 
         _videos  = await query.Skip(_page * PageSize).Take(PageSize).ToListAsync();
@@ -140,7 +186,19 @@ else
 
     void ResetFilters()
     {
-        _minEco = null; _minBelarus = null; _dateFrom = null; _page = 0;
+        _minEco = null; _minBelarus = null; _dateFrom = null;
+        _authorFilter = null; _page = 0;
         _ = LoadAsync();
+    }
+
+    void ConfirmDelete(Video v) => _deleteTarget = v;
+
+    async Task DeleteConfirmed()
+    {
+        if (_deleteTarget == null) return;
+        Db.Videos.Remove(_deleteTarget);
+        await Db.SaveChangesAsync();
+        _deleteTarget = null;
+        await LoadAsync();
     }
 }

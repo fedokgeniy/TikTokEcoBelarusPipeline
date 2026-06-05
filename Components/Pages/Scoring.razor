@@ -1,0 +1,287 @@
+﻿@page "/scoring"
+@rendermode InteractiveServer
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-3">⚖️ Правила скоринга</h4>
+
+<!-- Добавить новое правило -->
+<div class="card p-3 mb-4">
+    <h6 class="mb-3">➕ Новое правило</h6>
+    <div class="row g-2">
+        <div class="col-md-3">
+            <input class="form-control form-control-sm" placeholder="Ключевое слово"
+                   @bind="_newKeyword" />
+        </div>
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" @bind="_newScoreType">
+                <option value="belarus">belarus</option>
+                <option value="eco">eco</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <input class="form-control form-control-sm" placeholder="Категория"
+                   @bind="_newCategory" />
+        </div>
+        <div class="col-md-1">
+            <input class="form-control form-control-sm" placeholder="Вес"
+                   type="number" step="0.01" min="0.01" max="1"
+                   @bind="_newWeight" />
+        </div>
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" @bind="_newContext">
+                <option value="any">any</option>
+                <option value="hashtags">hashtags</option>
+                <option value="bio">bio</option>
+                <option value="description">description</option>
+            </select>
+        </div>
+        <div class="col-md-1">
+            <input class="form-control form-control-sm" placeholder="MaxMatches"
+                   type="number" min="1" @bind="_newMaxMatches" />
+        </div>
+        <div class="col-md-1">
+            <button class="btn btn-sm btn-success w-100" @onclick="AddRule"
+                    disabled="@(string.IsNullOrWhiteSpace(_newKeyword))">Добавить</button>
+        </div>
+    </div>
+    @if (_addError != null)
+    {
+        <div class="text-danger small mt-1">@_addError</div>
+    }
+</div>
+
+<!-- Фильтр -->
+<div class="row g-2 mb-3">
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="_filterType" @bind:after="ApplyFilter">
+            <option value="">Все типы</option>
+            <option value="belarus">belarus</option>
+            <option value="eco">eco</option>
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="_filterActive" @bind:after="ApplyFilter">
+            <option value="">Все</option>
+            <option value="true">Активные</option>
+            <option value="false">Неактивные</option>
+        </select>
+    </div>
+    <div class="col-md-3">
+        <input class="form-control form-control-sm" placeholder="Поиск по ключевому слову"
+               @bind="_filterKeyword" @bind:event="oninput" @bind:after="ApplyFilter" />
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <div class="text-muted small mb-2">Показано: @_filtered.Count из @_all.Count правил</div>
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>Ключевое слово</th>
+                <th>Тип</th>
+                <th>Категория</th>
+                <th>Вес</th>
+                <th>Контекст</th>
+                <th>MaxMatches</th>
+                <th>Активно</th>
+                <th>Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var r in _filtered)
+            {
+                <tr>
+                    @if (_editId == r.Id)
+                    {
+                        <!-- Режим редактирования -->
+                        <td><input class="form-control form-control-sm" @bind="_editKeyword" /></td>
+                        <td>
+                            <select class="form-select form-select-sm" @bind="_editScoreType">
+                                <option value="belarus">belarus</option>
+                                <option value="eco">eco</option>
+                            </select>
+                        </td>
+                        <td><input class="form-control form-control-sm" @bind="_editCategory" /></td>
+                        <td><input class="form-control form-control-sm" type="number" step="0.01" @bind="_editWeight" /></td>
+                        <td>
+                            <select class="form-select form-select-sm" @bind="_editContext">
+                                <option value="any">any</option>
+                                <option value="hashtags">hashtags</option>
+                                <option value="bio">bio</option>
+                                <option value="description">description</option>
+                            </select>
+                        </td>
+                        <td><input class="form-control form-control-sm" type="number" @bind="_editMaxMatches" /></td>
+                        <td>
+                            <input type="checkbox" class="form-check-input" @bind="_editIsActive" />
+                        </td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-success" @onclick="() => SaveEdit(r)">✓</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">✗</button>
+                        </td>
+                    }
+                    else
+                    {
+                        <!-- Обычный режим -->
+                        <td>@r.Keyword</td>
+                        <td><span class="badge @(r.ScoreType == "eco" ? "bg-success" : "bg-warning text-dark")">@r.ScoreType</span></td>
+                        <td><span class="badge bg-secondary">@r.Category</span></td>
+                        <td>@r.Weight.ToString("F4")</td>
+                        <td>@r.SearchContext</td>
+                        <td>@r.MaxMatches</td>
+                        <td>
+                            @if (r.IsActive)
+                            { <span class="badge bg-success">✓</span> }
+                            else
+                            { <span class="badge bg-danger">✗</span> }
+                        </td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(r)">✏️</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(r)">🗑</button>
+                        </td>
+                    }
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<!-- Модалка удаления -->
+@if (_deleteTarget != null)
+{
+    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">Удалить правило?</h6>
+                </div>
+                <div class="modal-body small">«@_deleteTarget.Keyword» (@_deleteTarget.ScoreType)</div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteConfirmed">Удалить</button>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => _deleteTarget = null">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    List<ScoringRule> _all      = [];
+    List<ScoringRule> _filtered = [];
+    bool _loading = true;
+
+    // Новое правило
+    string  _newKeyword   = "";
+    string  _newScoreType = "eco";
+    string  _newCategory  = "";
+    decimal _newWeight    = 0.3m;
+    string  _newContext   = "any";
+    int     _newMaxMatches = 1;
+    string? _addError;
+
+    // Фильтры
+    string _filterType    = "";
+    string _filterActive  = "";
+    string _filterKeyword = "";
+
+    // Редактирование
+    Guid?   _editId;
+    string  _editKeyword   = "";
+    string  _editScoreType = "";
+    string  _editCategory  = "";
+    decimal _editWeight;
+    string  _editContext   = "any";
+    int     _editMaxMatches = 1;
+    bool    _editIsActive;
+
+    ScoringRule? _deleteTarget;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _all     = await Db.ScoringRules.OrderBy(r => r.ScoreType).ThenBy(r => r.Keyword).ToListAsync();
+        ApplyFilter();
+        _loading = false;
+    }
+
+    void ApplyFilter()
+    {
+        _filtered = _all
+            .Where(r => string.IsNullOrEmpty(_filterType)    || r.ScoreType == _filterType)
+            .Where(r => string.IsNullOrEmpty(_filterActive)  || r.IsActive.ToString().ToLower() == _filterActive)
+            .Where(r => string.IsNullOrEmpty(_filterKeyword) || r.Keyword.Contains(_filterKeyword, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    async Task AddRule()
+    {
+        _addError = null;
+        if (string.IsNullOrWhiteSpace(_newKeyword)) { _addError = "Введите ключевое слово"; return; }
+        if (_newWeight <= 0 || _newWeight > 1)      { _addError = "Вес должен быть от 0.01 до 1.0"; return; }
+
+        Db.ScoringRules.Add(new ScoringRule
+        {
+            Keyword       = _newKeyword.Trim(),
+            ScoreType     = _newScoreType,
+            Category      = _newCategory.Trim(),
+            Weight        = _newWeight,
+            SearchContext = _newContext,
+            MaxMatches    = _newMaxMatches,
+            IsActive      = true,
+            CreatedAt     = DateTime.UtcNow
+        });
+        await Db.SaveChangesAsync();
+
+        _newKeyword = ""; _newCategory = ""; _newWeight = 0.3m; _newMaxMatches = 1;
+        await LoadAsync();
+    }
+
+    void StartEdit(ScoringRule r)
+    {
+        _editId         = r.Id;
+        _editKeyword    = r.Keyword;
+        _editScoreType  = r.ScoreType;
+        _editCategory   = r.Category;
+        _editWeight     = r.Weight;
+        _editContext    = r.SearchContext;
+        _editMaxMatches = r.MaxMatches;
+        _editIsActive   = r.IsActive;
+    }
+
+    async Task SaveEdit(ScoringRule r)
+    {
+        r.Keyword       = _editKeyword.Trim();
+        r.ScoreType     = _editScoreType;
+        r.Category      = _editCategory.Trim();
+        r.Weight        = _editWeight;
+        r.SearchContext = _editContext;
+        r.MaxMatches    = _editMaxMatches;
+        r.IsActive      = _editIsActive;
+        await Db.SaveChangesAsync();
+        _editId = null;
+        ApplyFilter();
+    }
+
+    void CancelEdit() => _editId = null;
+
+    void ConfirmDelete(ScoringRule r) => _deleteTarget = r;
+
+    async Task DeleteConfirmed()
+    {
+        if (_deleteTarget == null) return;
+        Db.ScoringRules.Remove(_deleteTarget);
+        await Db.SaveChangesAsync();
+        _deleteTarget = null;
+        await LoadAsync();
+    }
+}

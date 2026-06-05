@@ -77,6 +77,12 @@ public class PipelineOrchestrator(IServiceScopeFactory scopeFactory)
                             belarus = scored.BelarusSignals,
                             eco = scored.EcoSignals
                         }),
+                        PublishedAt = scored.Item.CreateTime > 0
+                       ? DateTimeOffset.FromUnixTimeSeconds(scored.Item.CreateTime).UtcDateTime
+                       : null,
+                        MatchedKeywords = scored.BelarusSignals.Concat(scored.EcoSignals)
+    .Distinct()
+    .ToArray(),
                         FetchedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     });

@@ -2,7 +2,7 @@
 
 public class Video
 {
-    public string VideoId { get; set; } = string.Empty;     // PK — ID из TikTok
+    public string VideoId { get; set; } = string.Empty;
     public string VideoUrl { get; set; } = string.Empty;
     public string AuthorUniqueId { get; set; } = string.Empty;
     public string AuthorNickname { get; set; } = string.Empty;
@@ -15,7 +15,9 @@ public class Video
     public long ViewCount { get; set; }
     public decimal BelarusScore { get; set; }
     public decimal EcoScore { get; set; }
-    public string ScoreBreakdown { get; set; } = "{}";      // jsonb — сериализованный список сигналов
+    public string ScoreBreakdown { get; set; } = "{}";
+    public string[] MatchedKeywords { get; set; } = [];  
+    public DateTime? PublishedAt { get; set; }            
     public DateTime FetchedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
