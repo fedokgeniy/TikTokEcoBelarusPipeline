@@ -1,0 +1,132 @@
+﻿@page "/hashtags"
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-3">🏷️ Кандидаты на добавление хэштегов</h4>
+<p class="text-muted small">Хэштеги из найденных видео которых ещё нет в поисковых запросах. Выбери подходящие и добавь в базу.</p>
+
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else if (_candidates.Count == 0)
+{
+    <div class="alert alert-info">Новых кандидатов нет — все хэштеги уже есть в запросах.</div>
+}
+else
+{
+    <div class="mb-2">
+        <button class="btn btn-sm btn-success" @onclick="AddSelectedAsync"
+                disabled="@(_selected.Count == 0)">
+            + Добавить выбранные (@_selected.Count)
+        </button>
+        <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="SelectAll">Выбрать все</button>
+        <button class="btn btn-sm btn-outline-secondary ms-1" @onclick="() => _selected.Clear()">Снять выбор</button>
+    </div>
+
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th style="width:40px"></th>
+                <th>Хэштег</th>
+                <th>Встречается в видео</th>
+                <th>Avg TotalScore</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var c in _candidates)
+            {
+                <tr>
+                    <td>
+                        <input type="checkbox"
+                               checked="@_selected.Contains(c.Tag)"
+                               @onchange="() => ToggleSelect(c.Tag)" />
+                    </td>
+                    <td><span class="badge bg-info text-dark">#@c.Tag</span></td>
+                    <td>@c.Count</td>
+                    <td>@c.AvgScore.ToString("F2")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    List<HashtagCandidate> _candidates = [];
+    HashSet<string> _selected = [];
+    bool _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+
+        var existingValues = await Db.SearchQueries
+            .Select(q => q.Value.ToLower())
+            .ToListAsync();
+        var existingSet = existingValues.ToHashSet();
+
+        var videos = await Db.Videos
+            .Where(v => (double)v.EcoScore >= 0.4 || (double)v.BelarusScore >= 0.4)
+            .Select(v => new { v.Hashtags, v.EcoScore, v.BelarusScore })
+            .ToListAsync();
+
+        _candidates = videos
+            .SelectMany(v => v.Hashtags.Select(tag => new
+            {
+                Tag   = tag.ToLower().Trim('#'),
+                Score = (double)(v.EcoScore + v.BelarusScore) / 2
+            }))
+            .Where(x => !existingSet.Contains(x.Tag) && x.Tag.Length > 2)
+            .GroupBy(x => x.Tag)
+            .Where(g => g.Count() >= 2)
+            .Select(g => new HashtagCandidate
+            {
+                Tag      = g.Key,
+                Count    = g.Count(),
+                AvgScore = g.Average(x => x.Score)
+            })
+            .OrderByDescending(c => c.Count)
+            .ThenByDescending(c => c.AvgScore)
+            .Take(50)
+            .ToList();
+
+        _loading = false;
+    }
+
+    void ToggleSelect(string tag)
+    {
+        if (!_selected.Add(tag)) _selected.Remove(tag);
+    }
+
+    void SelectAll() => _selected = _candidates.Select(c => c.Tag).ToHashSet();
+
+    async Task AddSelectedAsync()
+    {
+        var maxPriority = await Db.SearchQueries.MaxAsync(q => (int?)q.Priority) ?? 0;
+        int i = 1;
+        foreach (var tag in _selected)
+        {
+            Db.SearchQueries.Add(new SearchQuery
+            {
+                QueryType = "hashtag",
+                Value     = tag,
+                Priority  = maxPriority + i++,
+                IsActive  = true
+            });
+        }
+        await Db.SaveChangesAsync();
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    record HashtagCandidate
+    {
+        public string Tag    { get; init; } = "";
+        public int Count     { get; init; }
+        public double AvgScore { get; init; }
+    }
+}

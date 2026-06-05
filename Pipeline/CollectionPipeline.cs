@@ -26,15 +26,17 @@ public class CollectionPipeline
         int maxPerQuery = 5,
         CancellationToken ct = default)
     {
-        // Читаем активные запросы из БД вместо захардкоженного массива
         var queries = await _searchQueryRepo.GetActiveQueriesAsync();
 
-        var seen = new HashSet<string>(); // in-memory дедупликация внутри одного запуска
+        var seen = new HashSet<string>();
         var results = new List<ScoredVideo>();
 
         foreach (var query in queries.OrderBy(q => q.Priority))
         {
             Console.WriteLine($"[SEARCH] Querying: \"{query.Value}\" (type: {query.QueryType})");
+
+            if (query.DateFrom.HasValue)
+                Console.WriteLine($"[FILTER] Видео не старше: {query.DateFrom.Value:yyyy-MM-dd}");
 
             await foreach (var item in _api.SearchVideosAsync(query.Value, maxPerQuery, ct: ct))
             {
@@ -43,6 +45,14 @@ public class CollectionPipeline
 
                 if (item.Author.PrivateAccount)
                     continue;
+
+                // Фильтрация по дате публикации
+                if (query.DateFrom.HasValue &&
+                    item.CreatedAt.UtcDateTime < query.DateFrom.Value.ToUniversalTime())
+                {
+                    Console.WriteLine($"[SKIP] Видео {item.Id} старше DateFrom ({item.CreatedAt:yyyy-MM-dd})");
+                    continue;
+                }
 
                 var scored = await _scorer.ScoreAsync(item);
 
@@ -57,7 +67,6 @@ public class CollectionPipeline
                 }
             }
 
-            // Обновляем LastRunAt после каждого запроса
             await _searchQueryRepo.UpdateLastRunAtAsync(query.Id);
         }
 

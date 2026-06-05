@@ -1,0 +1,145 @@
+﻿@page "/videos"
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-3">🎬 Видео</h4>
+
+<!-- Фильтры -->
+<div class="row g-2 mb-3">
+    <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Мин EcoScore"
+               @bind="_minEco" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Мин BelarusScore"
+               @bind="_minBelarus" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" class="form-control form-control-sm"
+               @bind="_dateFrom" />
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-sm btn-primary w-100" @onclick="LoadAsync">Применить</button>
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сбросить</button>
+    </div>
+</div>
+
+<!-- Таблица -->
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <div class="text-muted small mb-2">Найдено: @_total видео</div>
+    <table class="table table-hover table-sm">
+        <thead class="table-dark">
+            <tr>
+                <th @onclick='() => SetSort("AuthorUniqueId")' style="cursor:pointer">Автор @SortIcon("AuthorUniqueId")</th>
+                <th>Описание</th>
+                <th @onclick='() => SetSort("EcoScore")' style="cursor:pointer">EcoScore @SortIcon("EcoScore")</th>
+                <th @onclick='() => SetSort("BelarusScore")' style="cursor:pointer">BelarusScore @SortIcon("BelarusScore")</th>
+                <th @onclick='() => SetSort("ViewCount")' style="cursor:pointer">Просмотры @SortIcon("ViewCount")</th>
+                <th @onclick='() => SetSort("LikeCount")' style="cursor:pointer">Лайки @SortIcon("LikeCount")</th>
+                <th @onclick='() => SetSort("CommentCount")' style="cursor:pointer">Комменты @SortIcon("CommentCount")</th>
+                <th @onclick='() => SetSort("FetchedAt")' style="cursor:pointer">Дата @SortIcon("FetchedAt")</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var v in _videos)
+            {
+                <tr>
+                    <td><a href="@v.VideoUrl" target="_blank">@@@v.AuthorUniqueId</a></td>
+                    <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
+                        title="@v.Description">@v.Description</td>
+                    <td><span class="badge bg-success">@v.EcoScore.ToString("F2")</span></td>
+                    <td><span class="badge bg-warning text-dark">@v.BelarusScore.ToString("F2")</span></td>
+                    <td>@v.ViewCount.ToString("N0")</td>
+                    <td>@v.LikeCount.ToString("N0")</td>
+                    <td>@v.CommentCount.ToString("N0")</td>
+                    <td>@v.FetchedAt.ToString("dd.MM.yyyy")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <!-- Пагинация -->
+    <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-outline-primary" @onclick="PrevPage" disabled="@(_page == 0)">←</button>
+        <span>Страница @(_page + 1)</span>
+        <button class="btn btn-sm btn-outline-primary" @onclick="NextPage" disabled="@(!_hasMore)">→</button>
+    </div>
+}
+
+@code {
+    List<Video> _videos = [];
+    bool _loading = true;
+    int _page = 0;
+    int _total;
+    bool _hasMore;
+    const int PageSize = 20;
+
+    string _sortField = "FetchedAt";
+    bool _sortDesc    = true;
+
+    double? _minEco;
+    double? _minBelarus;
+    DateTime? _dateFrom;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+
+        var query = Db.Videos.AsQueryable();
+
+        if (_minEco.HasValue)
+            query = query.Where(v => (double)v.EcoScore >= _minEco.Value);
+        if (_minBelarus.HasValue)
+            query = query.Where(v => (double)v.BelarusScore >= _minBelarus.Value);
+        if (_dateFrom.HasValue)
+            query = query.Where(v => v.FetchedAt >= _dateFrom.Value);
+
+        _total = await query.CountAsync();
+        _hasMore = (_page + 1) * PageSize < _total;
+
+        query = _sortField switch
+        {
+            "EcoScore"       => _sortDesc ? query.OrderByDescending(v => v.EcoScore)      : query.OrderBy(v => v.EcoScore),
+            "BelarusScore"   => _sortDesc ? query.OrderByDescending(v => v.BelarusScore)  : query.OrderBy(v => v.BelarusScore),
+            "ViewCount"      => _sortDesc ? query.OrderByDescending(v => v.ViewCount)     : query.OrderBy(v => v.ViewCount),
+            "LikeCount"      => _sortDesc ? query.OrderByDescending(v => v.LikeCount)     : query.OrderBy(v => v.LikeCount),
+            "CommentCount"   => _sortDesc ? query.OrderByDescending(v => v.CommentCount)  : query.OrderBy(v => v.CommentCount),
+            "FetchedAt"      => _sortDesc ? query.OrderByDescending(v => v.FetchedAt)     : query.OrderBy(v => v.FetchedAt),
+            "AuthorUniqueId" => _sortDesc ? query.OrderByDescending(v => v.AuthorUniqueId): query.OrderBy(v => v.AuthorUniqueId),
+            _                => query.OrderByDescending(v => v.FetchedAt)
+        };
+
+        _videos  = await query.Skip(_page * PageSize).Take(PageSize).ToListAsync();
+        _loading = false;
+    }
+
+    void SetSort(string field)
+    {
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = true; }
+        _page = 0;
+        _ = LoadAsync();
+    }
+
+    string SortIcon(string field) => _sortField == field ? (_sortDesc ? "↓" : "↑") : "";
+
+    async Task PrevPage() { if (_page > 0) { _page--; await LoadAsync(); } }
+    async Task NextPage() { _page++; await LoadAsync(); }
+
+    void ResetFilters()
+    {
+        _minEco = null; _minBelarus = null; _dateFrom = null; _page = 0;
+        _ = LoadAsync();
+    }
+}

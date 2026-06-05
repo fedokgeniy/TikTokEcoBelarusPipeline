@@ -1,0 +1,103 @@
+﻿@page "/"
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-4">📊 Общая статистика</h4>
+
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card text-center p-3">
+                <div class="fs-2 fw-bold text-success">@_totalVideos</div>
+                <div class="text-muted">Всего видео</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center p-3">
+                <div class="fs-2 fw-bold text-primary">@_avgEco.ToString("F2")</div>
+                <div class="text-muted">Средний EcoScore</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center p-3">
+                <div class="fs-2 fw-bold text-warning">@_avgBelarus.ToString("F2")</div>
+                <div class="text-muted">Средний BelarusScore</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center p-3">
+                <div class="fs-2 fw-bold text-danger">@_activeQueries</div>
+                <div class="text-muted">Активных запросов</div>
+            </div>
+        </div>
+    </div>
+
+    <h5 class="mb-3">🏆 Топ авторы по EcoScore</h5>
+    <table class="table table-striped table-sm">
+        <thead>
+            <tr>
+                <th>Автор</th>
+                <th>Видео</th>
+                <th>Avg EcoScore</th>
+                <th>Avg BelarusScore</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var author in _topAuthors)
+            {
+                <tr>
+                    <td><a href="https://tiktok.com/@@@author.AuthorUniqueId" target="_blank">@@@author.AuthorUniqueId</a></td>
+                    <td>@author.Count</td>
+                    <td>@author.AvgEco.ToString("F2")</td>
+                    <td>@author.AvgBelarus.ToString("F2")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    bool _loading = true;
+    int _totalVideos;
+    double _avgEco;
+    double _avgBelarus;
+    int _activeQueries;
+    List<AuthorStat> _topAuthors = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _totalVideos   = await Db.Videos.CountAsync();
+        _avgEco        = _totalVideos > 0 ? (double)await Db.Videos.AverageAsync(v => v.EcoScore) : 0;
+        _avgBelarus    = _totalVideos > 0 ? (double)await Db.Videos.AverageAsync(v => v.BelarusScore) : 0;
+        _activeQueries = await Db.SearchQueries.CountAsync(q => q.IsActive);
+
+        _topAuthors = await Db.Videos
+            .GroupBy(v => v.AuthorUniqueId)
+            .Select(g => new AuthorStat
+            {
+                AuthorUniqueId = g.Key,
+                Count          = g.Count(),
+                AvgEco         = (double)g.Average(v => v.EcoScore),
+                AvgBelarus     = (double)g.Average(v => v.BelarusScore)
+            })
+            .OrderByDescending(a => a.AvgEco)
+            .Take(10)
+            .ToListAsync();
+
+        _loading = false;
+    }
+
+    record AuthorStat
+    {
+        public string AuthorUniqueId { get; init; } = "";
+        public int Count             { get; init; }
+        public double AvgEco         { get; init; }
+        public double AvgBelarus     { get; init; }
+    }
+}
