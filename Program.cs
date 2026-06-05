@@ -21,6 +21,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 
 // ── Репозитории и сервисы ──────────────────────────────────────
+builder.Services.AddSingleton<PipelineOrchestrator>();
 builder.Services.AddScoped<IScoringRuleRepository, ScoringRuleRepository>();
 builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
 builder.Services.AddScoped<BelarusEcoScorer>();
