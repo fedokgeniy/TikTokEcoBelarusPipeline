@@ -143,6 +143,8 @@ else
     async Task LoadAsync()
     {
         _loading = true;
+        StateHasChanged();
+        await Task.Yield(); 
 
         var query = Db.Videos.AsQueryable();
 
