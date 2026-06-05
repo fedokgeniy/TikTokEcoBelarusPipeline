@@ -1,4 +1,5 @@
-﻿using TikTokEcoBelarus.Models;
+﻿using TikTokEcoBelarus.Infrastructure.Repositories;
+using TikTokEcoBelarus.Models;
 using TikTokEcoBelarus.Services;
 
 namespace TikTokEcoBelarus.Pipeline;
@@ -7,40 +8,16 @@ public class CollectionPipeline
 {
     private readonly TikTokApiClient _api;
     private readonly BelarusEcoScorer _scorer;
+    private readonly ISearchQueryRepository _searchQueryRepo;
 
-    // Наборы поисковых запросов под белорусский экоконтент
-    private static readonly string[] SearchQueries =
-    [
-        // Русский язык
-        "экология беларусь",
-        "природа беларусь",
-        "минск мусор переработка",
-        "беловежская пуща",
-        "нарочь природа",
-        "загрязнение беларусь",
-        "зелёный беларусь",
-        "экоактивизм беларусь",
-        "раздельный сбор беларусь",
-
-        // Белорусский язык
-        "экалогія беларусь",
-        "прырода беларусь",
-
-        // Хэштеги как запросы
-        "#беларусь #экология",
-        "#беловежскаяпуща",
-        "#минскприрода",
-
-        // English
-        "belarus ecology",
-        "belarus nature",
-        "belovezhskaya forest",
-    ];
-
-    public CollectionPipeline(TikTokApiClient api, BelarusEcoScorer scorer)
+    public CollectionPipeline(
+        TikTokApiClient api,
+        BelarusEcoScorer scorer,
+        ISearchQueryRepository searchQueryRepo)
     {
         _api = api;
         _scorer = scorer;
+        _searchQueryRepo = searchQueryRepo;
     }
 
     public async Task<List<ScoredVideo>> RunAsync(
@@ -49,37 +26,41 @@ public class CollectionPipeline
         int maxPerQuery = 5,
         CancellationToken ct = default)
     {
-        var seen = new HashSet<string>(); // дедупликация по video ID
+        // Читаем активные запросы из БД вместо захардкоженного массива
+        var queries = await _searchQueryRepo.GetActiveQueriesAsync();
+
+        var seen = new HashSet<string>(); // in-memory дедупликация внутри одного запуска
         var results = new List<ScoredVideo>();
 
-        foreach (var query in SearchQueries)
+        foreach (var query in queries.OrderBy(q => q.Priority))
         {
-            Console.WriteLine($"[SEARCH] Querying: \"{query}\"");
+            Console.WriteLine($"[SEARCH] Querying: \"{query.Value}\" (type: {query.QueryType})");
 
-            await foreach (var item in _api.SearchVideosAsync(query, maxPerQuery, ct: ct))
+            await foreach (var item in _api.SearchVideosAsync(query.Value, maxPerQuery, ct: ct))
             {
-                // Пропускаем дубли и рекламу
                 if (!seen.Add(item.Id) || item.IsAd)
                     continue;
 
-                // Пропускаем приватные аккаунты
                 if (item.Author.PrivateAccount)
                     continue;
 
-                var scored = _scorer.Score(item);
+                var scored = await _scorer.ScoreAsync(item);
 
                 if (scored.PassesThreshold(minBelarus, minEco))
                 {
                     results.Add(scored);
                     Console.WriteLine(
-                        $" [{scored.TotalScore:F2}] BY={scored.BelarusScore:F2} " +
-                        $"ECO={scored.EcoScore:F2} | @{item.Author.UniqueId}: {item.Desc[..Math.Min(60, item.Desc.Length)]}..."
+                        $"  [{scored.TotalScore:F2}] BY={scored.BelarusScore:F2} " +
+                        $"ECO={scored.EcoScore:F2} | @{item.Author.UniqueId}: " +
+                        $"{item.Desc[..Math.Min(60, item.Desc.Length)]}..."
                     );
                 }
             }
+
+            // Обновляем LastRunAt после каждого запроса
+            await _searchQueryRepo.UpdateLastRunAtAsync(query.Id);
         }
 
-        // Сортировка по итоговому score
         return results
             .OrderByDescending(v => v.TotalScore)
             .ToList();
