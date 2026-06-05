@@ -5,6 +5,7 @@
 @using Microsoft.EntityFrameworkCore
 @using System.Text.Json
 @using System.Text.Json.Serialization
+@using System.Text.Encodings.Web
 @inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
 
@@ -31,7 +32,6 @@
 }
 else
 {
-    <!-- Rules -->
     <h5 class="mt-2">Правила (всего: @_rules.Count)</h5>
     <table class="table table-sm table-hover">
         <thead class="table-dark">
@@ -56,7 +56,6 @@ else
         </tbody>
     </table>
 
-    <!-- Thresholds -->
     <h5 class="mt-4">Пороги (всего: @_thresholds.Count)</h5>
     <table class="table table-sm table-hover">
         <thead class="table-dark">
@@ -79,12 +78,18 @@ else
 }
 
 @code {
-    bool _loading     = true;
+    bool    _loading     = true;
     string? _importMsg   = null;
     bool    _importError = false;
 
     List<ScoringRule>          _rules      = [];
     List<ScoringRuleThreshold> _thresholds = [];
+
+    static readonly JsonSerializerOptions _exportOptions = new()
+    {
+        WriteIndented = true,
+        Encoder       = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -102,7 +107,7 @@ else
     {
         var profile = new ScoringProfileDto
         {
-            Rules      = _rules.Select(r => new RuleDto
+            Rules = _rules.Select(r => new RuleDto
             {
                 Keyword       = r.Keyword,
                 Category      = r.Category,
@@ -121,7 +126,7 @@ else
             }).ToList()
         };
 
-        var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions { WriteIndented = true });
+        var json  = JsonSerializer.Serialize(profile, _exportOptions);
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
         var b64   = Convert.ToBase64String(bytes);
         await JS.InvokeVoidAsync("downloadFileFromBase64", "scoring-profile.json", "application/json", b64);
@@ -134,15 +139,13 @@ else
 
         try
         {
-            using var stream = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
+            using var stream  = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
             var profile = await JsonSerializer.DeserializeAsync<ScoringProfileDto>(stream,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
             if (profile == null) throw new Exception("Пустой файл");
 
             await using var db = await DbFactory.CreateDbContextAsync();
-
-            // Заменяем все правила целиком
             await db.ScoringRules.ExecuteDeleteAsync();
             await db.ScoringRuleThresholds.ExecuteDeleteAsync();
 
@@ -176,7 +179,6 @@ else
         }
     }
 
-    // DTOs — без Id/CreatedAt чтобы JSON был чистым
     record ScoringProfileDto
     {
         public List<RuleDto>      Rules      { get; init; } = [];
