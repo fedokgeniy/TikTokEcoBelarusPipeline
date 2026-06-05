@@ -4,6 +4,7 @@
 @using TikTokEcoBelarus.Infrastructure
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
 
 <h4 class="mb-3">🎬 Видео</h4>
 
@@ -35,6 +36,9 @@
     </div>
     <div class="col-md-1">
         <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сбросить</button>
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-sm btn-danger w-100" @onclick="ConfirmDeleteAll">🗑 Удалить все</button>
     </div>
 </div>
 
@@ -122,13 +126,34 @@ else
     </div>
 }
 
+@if (_confirmDeleteAll)
+{
+    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h6 class="modal-title">⚠️ Удалить ВСЕ видео?</h6>
+                </div>
+                <div class="modal-body small">
+                    Будет удалено <strong>@_total</strong> видео. Это действие необратимо.
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteAllConfirmed">Удалить все</button>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => _confirmDeleteAll = false">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     List<Video> _videos = [];
-    bool    _loading    = true;
-    int     _page       = 0;
+    bool    _loading         = true;
+    bool    _confirmDeleteAll = false;
+    int     _page            = 0;
     int     _total;
     bool    _hasMore;
-    const int PageSize  = 20;
+    const int PageSize       = 20;
 
     string _sortField = "PublishedAt";
     bool   _sortDesc  = true;
@@ -149,11 +174,7 @@ else
         if (field == nameof(_authorFilter))  _authorFilter  = value;
     }
 
-    async Task SearchClicked()
-    {
-        _page = 0;
-        await LoadAsync();
-    }
+    async Task SearchClicked() { _page = 0; await LoadAsync(); }
 
     async Task LoadAsync()
     {
@@ -220,7 +241,8 @@ else
         InvokeAsync(LoadAsync);
     }
 
-    void ConfirmDelete(Video v) => _deleteTarget = v;
+    void ConfirmDelete(Video v)   => _deleteTarget    = v;
+    void ConfirmDeleteAll()       => _confirmDeleteAll = true;
 
     async Task DeleteConfirmed()
     {
@@ -229,6 +251,16 @@ else
         db.Videos.Remove(_deleteTarget);
         await db.SaveChangesAsync();
         _deleteTarget = null;
+        await LoadAsync();
+    }
+
+    async Task DeleteAllConfirmed()
+    {
+        _confirmDeleteAll = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Set<VideoSearchQueryLink>().ExecuteDeleteAsync();
+        await db.Videos.ExecuteDeleteAsync();
+        _page = 0;
         await LoadAsync();
     }
 }

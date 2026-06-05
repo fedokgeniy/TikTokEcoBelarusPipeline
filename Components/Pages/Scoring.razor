@@ -1,287 +1,204 @@
-﻿@page "/scoring"
+@page "/scoring"
 @rendermode InteractiveServer
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
 @using Microsoft.EntityFrameworkCore
-@inject AppDbContext Db
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
 
-<h4 class="mb-3">⚖️ Правила скоринга</h4>
+<h4 class="mb-3">🎯 Scoring Profile</h4>
 
-<!-- Добавить новое правило -->
-<div class="card p-3 mb-4">
-    <h6 class="mb-3">➕ Новое правило</h6>
-    <div class="row g-2">
-        <div class="col-md-3">
-            <input class="form-control form-control-sm" placeholder="Ключевое слово"
-                   @bind="_newKeyword" />
-        </div>
-        <div class="col-md-2">
-            <select class="form-select form-select-sm" @bind="_newScoreType">
-                <option value="belarus">belarus</option>
-                <option value="eco">eco</option>
-            </select>
-        </div>
-        <div class="col-md-2">
-            <input class="form-control form-control-sm" placeholder="Категория"
-                   @bind="_newCategory" />
-        </div>
-        <div class="col-md-1">
-            <input class="form-control form-control-sm" placeholder="Вес"
-                   type="number" step="0.01" min="0.01" max="1"
-                   @bind="_newWeight" />
-        </div>
-        <div class="col-md-2">
-            <select class="form-select form-select-sm" @bind="_newContext">
-                <option value="any">any</option>
-                <option value="hashtags">hashtags</option>
-                <option value="bio">bio</option>
-                <option value="description">description</option>
-            </select>
-        </div>
-        <div class="col-md-1">
-            <input class="form-control form-control-sm" placeholder="MaxMatches"
-                   type="number" min="1" @bind="_newMaxMatches" />
-        </div>
-        <div class="col-md-1">
-            <button class="btn btn-sm btn-success w-100" @onclick="AddRule"
-                    disabled="@(string.IsNullOrWhiteSpace(_newKeyword))">Добавить</button>
-        </div>
-    </div>
-    @if (_addError != null)
+<div class="d-flex gap-2 mb-4 flex-wrap">
+    <button class="btn btn-outline-primary" @onclick="ExportJson">⬇️ Скачать JSON</button>
+    <label class="btn btn-outline-success mb-0">
+        ⬆️ Загрузить JSON
+        <InputFile OnChange="ImportJson" accept=".json" style="display:none" />
+    </label>
+    @if (_importMsg != null)
     {
-        <div class="text-danger small mt-1">@_addError</div>
+        <span class="@(_importError ? "text-danger" : "text-success") small align-self-center">@_importMsg</span>
     }
-</div>
-
-<!-- Фильтр -->
-<div class="row g-2 mb-3">
-    <div class="col-md-2">
-        <select class="form-select form-select-sm" @bind="_filterType" @bind:after="ApplyFilter">
-            <option value="">Все типы</option>
-            <option value="belarus">belarus</option>
-            <option value="eco">eco</option>
-        </select>
-    </div>
-    <div class="col-md-2">
-        <select class="form-select form-select-sm" @bind="_filterActive" @bind:after="ApplyFilter">
-            <option value="">Все</option>
-            <option value="true">Активные</option>
-            <option value="false">Неактивные</option>
-        </select>
-    </div>
-    <div class="col-md-3">
-        <input class="form-control form-control-sm" placeholder="Поиск по ключевому слову"
-               @bind="_filterKeyword" @bind:event="oninput" @bind:after="ApplyFilter" />
-    </div>
 </div>
 
 @if (_loading)
 {
-    <p>Загрузка...</p>
+    <div class="d-flex align-items-center gap-2 text-muted">
+        <div class="spinner-border spinner-border-sm"></div>
+        <span>Загрузка...</span>
+    </div>
 }
 else
 {
-    <div class="text-muted small mb-2">Показано: @_filtered.Count из @_all.Count правил</div>
+    <!-- Rules -->
+    <h5 class="mt-2">Правила (всего: @_rules.Count)</h5>
     <table class="table table-sm table-hover">
         <thead class="table-dark">
             <tr>
-                <th>Ключевое слово</th>
-                <th>Тип</th>
-                <th>Категория</th>
-                <th>Вес</th>
-                <th>Контекст</th>
-                <th>MaxMatches</th>
-                <th>Активно</th>
-                <th>Действия</th>
+                <th>Keyword</th><th>Category</th><th>ScoreType</th>
+                <th>Weight</th><th>SearchContext</th><th>MaxMatches</th><th>Active</th>
             </tr>
         </thead>
         <tbody>
-            @foreach (var r in _filtered)
+            @foreach (var r in _rules.OrderBy(r => r.ScoreType).ThenBy(r => r.Category))
             {
                 <tr>
-                    @if (_editId == r.Id)
-                    {
-                        <!-- Режим редактирования -->
-                        <td><input class="form-control form-control-sm" @bind="_editKeyword" /></td>
-                        <td>
-                            <select class="form-select form-select-sm" @bind="_editScoreType">
-                                <option value="belarus">belarus</option>
-                                <option value="eco">eco</option>
-                            </select>
-                        </td>
-                        <td><input class="form-control form-control-sm" @bind="_editCategory" /></td>
-                        <td><input class="form-control form-control-sm" type="number" step="0.01" @bind="_editWeight" /></td>
-                        <td>
-                            <select class="form-select form-select-sm" @bind="_editContext">
-                                <option value="any">any</option>
-                                <option value="hashtags">hashtags</option>
-                                <option value="bio">bio</option>
-                                <option value="description">description</option>
-                            </select>
-                        </td>
-                        <td><input class="form-control form-control-sm" type="number" @bind="_editMaxMatches" /></td>
-                        <td>
-                            <input type="checkbox" class="form-check-input" @bind="_editIsActive" />
-                        </td>
-                        <td class="d-flex gap-1">
-                            <button class="btn btn-sm btn-success" @onclick="() => SaveEdit(r)">✓</button>
-                            <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">✗</button>
-                        </td>
-                    }
-                    else
-                    {
-                        <!-- Обычный режим -->
-                        <td>@r.Keyword</td>
-                        <td><span class="badge @(r.ScoreType == "eco" ? "bg-success" : "bg-warning text-dark")">@r.ScoreType</span></td>
-                        <td><span class="badge bg-secondary">@r.Category</span></td>
-                        <td>@r.Weight.ToString("F4")</td>
-                        <td>@r.SearchContext</td>
-                        <td>@r.MaxMatches</td>
-                        <td>
-                            @if (r.IsActive)
-                            { <span class="badge bg-success">✓</span> }
-                            else
-                            { <span class="badge bg-danger">✗</span> }
-                        </td>
-                        <td class="d-flex gap-1">
-                            <button class="btn btn-sm btn-outline-primary" @onclick="() => StartEdit(r)">✏️</button>
-                            <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(r)">🗑</button>
-                        </td>
-                    }
+                    <td>@r.Keyword</td>
+                    <td><span class="badge bg-secondary">@r.Category</span></td>
+                    <td><span class="badge @(r.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@r.ScoreType</span></td>
+                    <td>@r.Weight</td>
+                    <td><code>@r.SearchContext</code></td>
+                    <td>@r.MaxMatches</td>
+                    <td>@(r.IsActive ? "✓" : "✗")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <!-- Thresholds -->
+    <h5 class="mt-4">Пороги (всего: @_thresholds.Count)</h5>
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>Category</th><th>ScoreType</th><th>MinMatchCount</th><th>ScoreBonus</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var t in _thresholds.OrderBy(t => t.ScoreType).ThenBy(t => t.Category))
+            {
+                <tr>
+                    <td><span class="badge bg-secondary">@t.Category</span></td>
+                    <td><span class="badge @(t.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@t.ScoreType</span></td>
+                    <td>@t.MinMatchCount</td>
+                    <td>@t.ScoreBonus</td>
                 </tr>
             }
         </tbody>
     </table>
 }
 
-<!-- Модалка удаления -->
-@if (_deleteTarget != null)
-{
-    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
-        <div class="modal-dialog modal-sm">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h6 class="modal-title">Удалить правило?</h6>
-                </div>
-                <div class="modal-body small">«@_deleteTarget.Keyword» (@_deleteTarget.ScoreType)</div>
-                <div class="modal-footer">
-                    <button class="btn btn-sm btn-danger" @onclick="DeleteConfirmed">Удалить</button>
-                    <button class="btn btn-sm btn-secondary" @onclick="() => _deleteTarget = null">Отмена</button>
-                </div>
-            </div>
-        </div>
-    </div>
-}
-
 @code {
-    List<ScoringRule> _all      = [];
-    List<ScoringRule> _filtered = [];
-    bool _loading = true;
+    bool _loading     = true;
+    string? _importMsg   = null;
+    bool    _importError = false;
 
-    // Новое правило
-    string  _newKeyword   = "";
-    string  _newScoreType = "eco";
-    string  _newCategory  = "";
-    decimal _newWeight    = 0.3m;
-    string  _newContext   = "any";
-    int     _newMaxMatches = 1;
-    string? _addError;
-
-    // Фильтры
-    string _filterType    = "";
-    string _filterActive  = "";
-    string _filterKeyword = "";
-
-    // Редактирование
-    Guid?   _editId;
-    string  _editKeyword   = "";
-    string  _editScoreType = "";
-    string  _editCategory  = "";
-    decimal _editWeight;
-    string  _editContext   = "any";
-    int     _editMaxMatches = 1;
-    bool    _editIsActive;
-
-    ScoringRule? _deleteTarget;
+    List<ScoringRule>          _rules      = [];
+    List<ScoringRuleThreshold> _thresholds = [];
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     async Task LoadAsync()
     {
         _loading = true;
-        _all     = await Db.ScoringRules.OrderBy(r => r.ScoreType).ThenBy(r => r.Keyword).ToListAsync();
-        ApplyFilter();
+        StateHasChanged();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _rules      = await db.ScoringRules.AsNoTracking().ToListAsync();
+        _thresholds = await db.ScoringRuleThresholds.AsNoTracking().ToListAsync();
         _loading = false;
     }
 
-    void ApplyFilter()
+    async Task ExportJson()
     {
-        _filtered = _all
-            .Where(r => string.IsNullOrEmpty(_filterType)    || r.ScoreType == _filterType)
-            .Where(r => string.IsNullOrEmpty(_filterActive)  || r.IsActive.ToString().ToLower() == _filterActive)
-            .Where(r => string.IsNullOrEmpty(_filterKeyword) || r.Keyword.Contains(_filterKeyword, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
-
-    async Task AddRule()
-    {
-        _addError = null;
-        if (string.IsNullOrWhiteSpace(_newKeyword)) { _addError = "Введите ключевое слово"; return; }
-        if (_newWeight <= 0 || _newWeight > 1)      { _addError = "Вес должен быть от 0.01 до 1.0"; return; }
-
-        Db.ScoringRules.Add(new ScoringRule
+        var profile = new ScoringProfileDto
         {
-            Keyword       = _newKeyword.Trim(),
-            ScoreType     = _newScoreType,
-            Category      = _newCategory.Trim(),
-            Weight        = _newWeight,
-            SearchContext = _newContext,
-            MaxMatches    = _newMaxMatches,
-            IsActive      = true,
-            CreatedAt     = DateTime.UtcNow
-        });
-        await Db.SaveChangesAsync();
+            Rules      = _rules.Select(r => new RuleDto
+            {
+                Keyword       = r.Keyword,
+                Category      = r.Category,
+                ScoreType     = r.ScoreType,
+                Weight        = r.Weight,
+                SearchContext = r.SearchContext,
+                MaxMatches    = r.MaxMatches,
+                IsActive      = r.IsActive
+            }).ToList(),
+            Thresholds = _thresholds.Select(t => new ThresholdDto
+            {
+                Category      = t.Category,
+                ScoreType     = t.ScoreType,
+                MinMatchCount = t.MinMatchCount,
+                ScoreBonus    = t.ScoreBonus
+            }).ToList()
+        };
 
-        _newKeyword = ""; _newCategory = ""; _newWeight = 0.3m; _newMaxMatches = 1;
-        await LoadAsync();
+        var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions { WriteIndented = true });
+        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        var b64   = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFileFromBase64", "scoring-profile.json", "application/json", b64);
     }
 
-    void StartEdit(ScoringRule r)
+    async Task ImportJson(InputFileChangeEventArgs e)
     {
-        _editId         = r.Id;
-        _editKeyword    = r.Keyword;
-        _editScoreType  = r.ScoreType;
-        _editCategory   = r.Category;
-        _editWeight     = r.Weight;
-        _editContext    = r.SearchContext;
-        _editMaxMatches = r.MaxMatches;
-        _editIsActive   = r.IsActive;
+        _importMsg   = null;
+        _importError = false;
+
+        try
+        {
+            using var stream = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
+            var profile = await JsonSerializer.DeserializeAsync<ScoringProfileDto>(stream,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (profile == null) throw new Exception("Пустой файл");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // Заменяем все правила целиком
+            await db.ScoringRules.ExecuteDeleteAsync();
+            await db.ScoringRuleThresholds.ExecuteDeleteAsync();
+
+            db.ScoringRules.AddRange(profile.Rules.Select(r => new ScoringRule
+            {
+                Keyword       = r.Keyword,
+                Category      = r.Category,
+                ScoreType     = r.ScoreType,
+                Weight        = r.Weight,
+                SearchContext = r.SearchContext,
+                MaxMatches    = r.MaxMatches,
+                IsActive      = r.IsActive
+            }));
+
+            db.ScoringRuleThresholds.AddRange(profile.Thresholds.Select(t => new ScoringRuleThreshold
+            {
+                Category      = t.Category,
+                ScoreType     = t.ScoreType,
+                MinMatchCount = t.MinMatchCount,
+                ScoreBonus    = t.ScoreBonus
+            }));
+
+            await db.SaveChangesAsync();
+            _importMsg = $"✓ Загружено: {profile.Rules.Count} правил, {profile.Thresholds.Count} порогов";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _importError = true;
+            _importMsg   = $"Ошибка: {ex.Message}";
+        }
     }
 
-    async Task SaveEdit(ScoringRule r)
+    // DTOs — без Id/CreatedAt чтобы JSON был чистым
+    record ScoringProfileDto
     {
-        r.Keyword       = _editKeyword.Trim();
-        r.ScoreType     = _editScoreType;
-        r.Category      = _editCategory.Trim();
-        r.Weight        = _editWeight;
-        r.SearchContext = _editContext;
-        r.MaxMatches    = _editMaxMatches;
-        r.IsActive      = _editIsActive;
-        await Db.SaveChangesAsync();
-        _editId = null;
-        ApplyFilter();
+        public List<RuleDto>      Rules      { get; init; } = [];
+        public List<ThresholdDto> Thresholds { get; init; } = [];
     }
 
-    void CancelEdit() => _editId = null;
-
-    void ConfirmDelete(ScoringRule r) => _deleteTarget = r;
-
-    async Task DeleteConfirmed()
+    record RuleDto
     {
-        if (_deleteTarget == null) return;
-        Db.ScoringRules.Remove(_deleteTarget);
-        await Db.SaveChangesAsync();
-        _deleteTarget = null;
-        await LoadAsync();
+        public string  Keyword       { get; init; } = "";
+        public string  Category      { get; init; } = "";
+        public string  ScoreType     { get; init; } = "";
+        public decimal Weight        { get; init; }
+        public string  SearchContext { get; init; } = "any";
+        public int     MaxMatches    { get; init; } = 1;
+        public bool    IsActive      { get; init; } = true;
+    }
+
+    record ThresholdDto
+    {
+        public string  Category      { get; init; } = "";
+        public string  ScoreType     { get; init; } = "";
+        public int     MinMatchCount { get; init; }
+        public decimal ScoreBonus    { get; init; }
     }
 }
