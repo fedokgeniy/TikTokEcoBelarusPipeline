@@ -27,6 +27,14 @@ using IHost host = Host.CreateDefaultBuilder(args)
     })
     .Build();
 
+// ── Seed ──────────────────────────────────────────────
+using (var seedScope = host.Services.CreateScope())
+{
+    var db = seedScope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await SeedData.SeedAsync(db);
+}
+// ──────────────────────────────────────────────────────
+
 using var scope = host.Services.CreateScope();
 var provider = scope.ServiceProvider;
 
