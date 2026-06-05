@@ -32,46 +32,106 @@
 }
 else
 {
+    <!-- ===== RULES ===== -->
     <h5 class="mt-2">Правила (всего: @_rules.Count)</h5>
-    <table class="table table-sm table-hover">
+    <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
                 <th>Keyword</th><th>Category</th><th>ScoreType</th>
-                <th>Weight</th><th>SearchContext</th><th>MaxMatches</th><th>Active</th>
+                <th>Weight</th><th>SearchContext</th><th>MaxMatches</th><th>Active</th><th></th>
             </tr>
         </thead>
         <tbody>
             @foreach (var r in _rules.OrderBy(r => r.ScoreType).ThenBy(r => r.Category))
             {
-                <tr>
-                    <td>@r.Keyword</td>
-                    <td><span class="badge bg-secondary">@r.Category</span></td>
-                    <td><span class="badge @(r.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@r.ScoreType</span></td>
-                    <td>@r.Weight</td>
-                    <td><code>@r.SearchContext</code></td>
-                    <td>@r.MaxMatches</td>
-                    <td>@(r.IsActive ? "✓" : "✗")</td>
-                </tr>
+                if (_editRuleId == r.Id)
+                {
+                    <tr class="table-warning">
+                        <td><input class="form-control form-control-sm" @bind="_editRule!.Keyword" /></td>
+                        <td><input class="form-control form-control-sm" @bind="_editRule!.Category" /></td>
+                        <td>
+                            <select class="form-select form-select-sm" @bind="_editRule!.ScoreType">
+                                <option>eco</option>
+                                <option>belarus</option>
+                            </select>
+                        </td>
+                        <td><input class="form-control form-control-sm" type="number" step="0.01" @bind="_editRule!.Weight" /></td>
+                        <td>
+                            <select class="form-select form-select-sm" @bind="_editRule!.SearchContext">
+                                <option>any</option>
+                                <option>hashtags</option>
+                                <option>bio</option>
+                                <option>description</option>
+                            </select>
+                        </td>
+                        <td><input class="form-control form-control-sm" type="number" @bind="_editRule!.MaxMatches" /></td>
+                        <td><input type="checkbox" class="form-check-input" @bind="_editRule!.IsActive" /></td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-success" @onclick="SaveRule">✓</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">✕</button>
+                        </td>
+                    </tr>
+                }
+                else
+                {
+                    <tr>
+                        <td>@r.Keyword</td>
+                        <td><span class="badge bg-secondary">@r.Category</span></td>
+                        <td><span class="badge @(r.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@r.ScoreType</span></td>
+                        <td>@r.Weight</td>
+                        <td><code>@r.SearchContext</code></td>
+                        <td>@r.MaxMatches</td>
+                        <td>@(r.IsActive ? "✓" : "✗")</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditRule(r)">✏️</button>
+                        </td>
+                    </tr>
+                }
             }
         </tbody>
     </table>
 
+    <!-- ===== THRESHOLDS ===== -->
     <h5 class="mt-4">Пороги (всего: @_thresholds.Count)</h5>
-    <table class="table table-sm table-hover">
+    <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
-                <th>Category</th><th>ScoreType</th><th>MinMatchCount</th><th>ScoreBonus</th>
+                <th>Category</th><th>ScoreType</th><th>MinMatchCount</th><th>ScoreBonus</th><th></th>
             </tr>
         </thead>
         <tbody>
             @foreach (var t in _thresholds.OrderBy(t => t.ScoreType).ThenBy(t => t.Category))
             {
-                <tr>
-                    <td><span class="badge bg-secondary">@t.Category</span></td>
-                    <td><span class="badge @(t.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@t.ScoreType</span></td>
-                    <td>@t.MinMatchCount</td>
-                    <td>@t.ScoreBonus</td>
-                </tr>
+                if (_editThresholdId == t.Id)
+                {
+                    <tr class="table-warning">
+                        <td><input class="form-control form-control-sm" @bind="_editThreshold!.Category" /></td>
+                        <td>
+                            <select class="form-select form-select-sm" @bind="_editThreshold!.ScoreType">
+                                <option>eco</option>
+                                <option>belarus</option>
+                            </select>
+                        </td>
+                        <td><input class="form-control form-control-sm" type="number" @bind="_editThreshold!.MinMatchCount" /></td>
+                        <td><input class="form-control form-control-sm" type="number" step="0.01" @bind="_editThreshold!.ScoreBonus" /></td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-success" @onclick="SaveThreshold">✓</button>
+                            <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">✕</button>
+                        </td>
+                    </tr>
+                }
+                else
+                {
+                    <tr>
+                        <td><span class="badge bg-secondary">@t.Category</span></td>
+                        <td><span class="badge @(t.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@t.ScoreType</span></td>
+                        <td>@t.MinMatchCount</td>
+                        <td>@t.ScoreBonus</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditThreshold(t)">✏️</button>
+                        </td>
+                    </tr>
+                }
             }
         </tbody>
     </table>
@@ -84,6 +144,14 @@ else
 
     List<ScoringRule>          _rules      = [];
     List<ScoringRuleThreshold> _thresholds = [];
+
+    // inline edit state — rules
+    Guid?        _editRuleId;
+    ScoringRule? _editRule;      // копия для редактирования
+
+    // inline edit state — thresholds
+    Guid?                   _editThresholdId;
+    ScoringRuleThreshold?   _editThreshold;
 
     static readonly JsonSerializerOptions _exportOptions = new()
     {
@@ -103,6 +171,67 @@ else
         _loading = false;
     }
 
+    // ---- Rule edit ----
+    void StartEditRule(ScoringRule r)
+    {
+        _editThresholdId = null; _editThreshold = null;  // закрываем если была открыта threshold
+        _editRuleId = r.Id;
+        _editRule   = new ScoringRule
+        {
+            Id            = r.Id,
+            Keyword       = r.Keyword,
+            Category      = r.Category,
+            ScoreType     = r.ScoreType,
+            Weight        = r.Weight,
+            SearchContext = r.SearchContext,
+            MaxMatches    = r.MaxMatches,
+            IsActive      = r.IsActive,
+            CreatedAt     = r.CreatedAt
+        };
+    }
+
+    async Task SaveRule()
+    {
+        if (_editRule == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ScoringRules.Update(_editRule);
+        await db.SaveChangesAsync();
+        CancelEdit();
+        await LoadAsync();
+    }
+
+    // ---- Threshold edit ----
+    void StartEditThreshold(ScoringRuleThreshold t)
+    {
+        _editRuleId = null; _editRule = null;
+        _editThresholdId = t.Id;
+        _editThreshold   = new ScoringRuleThreshold
+        {
+            Id            = t.Id,
+            Category      = t.Category,
+            ScoreType     = t.ScoreType,
+            MinMatchCount = t.MinMatchCount,
+            ScoreBonus    = t.ScoreBonus
+        };
+    }
+
+    async Task SaveThreshold()
+    {
+        if (_editThreshold == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ScoringRuleThresholds.Update(_editThreshold);
+        await db.SaveChangesAsync();
+        CancelEdit();
+        await LoadAsync();
+    }
+
+    void CancelEdit()
+    {
+        _editRuleId      = null; _editRule      = null;
+        _editThresholdId = null; _editThreshold = null;
+    }
+
+    // ---- Export / Import ----
     async Task ExportJson()
     {
         var profile = new ScoringProfileDto
@@ -136,7 +265,6 @@ else
     {
         _importMsg   = null;
         _importError = false;
-
         try
         {
             using var stream  = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
@@ -159,7 +287,6 @@ else
                 MaxMatches    = r.MaxMatches,
                 IsActive      = r.IsActive
             }));
-
             db.ScoringRuleThresholds.AddRange(profile.Thresholds.Select(t => new ScoringRuleThreshold
             {
                 Category      = t.Category,
@@ -184,7 +311,6 @@ else
         public List<RuleDto>      Rules      { get; init; } = [];
         public List<ThresholdDto> Thresholds { get; init; } = [];
     }
-
     record RuleDto
     {
         public string  Keyword       { get; init; } = "";
@@ -195,7 +321,6 @@ else
         public int     MaxMatches    { get; init; } = 1;
         public bool    IsActive      { get; init; } = true;
     }
-
     record ThresholdDto
     {
         public string  Category      { get; init; } = "";
