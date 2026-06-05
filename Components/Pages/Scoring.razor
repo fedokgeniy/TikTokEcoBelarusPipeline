@@ -23,6 +23,7 @@
     }
 </div>
 
+<!-- Фильтры -->
 <div class="row g-2 mb-3">
     <div class="col-md-3">
         <input class="form-control form-control-sm" placeholder="Поиск по Keyword"
@@ -53,7 +54,66 @@
 }
 else
 {
-    <h5 class="mt-2">Правила (показано: @FilteredRules.Count / @_rules.Count)</h5>
+    <!-- ===== RULES ===== -->
+    <div class="d-flex justify-content-between align-items-center mt-2 mb-1">
+        <h5 class="mb-0">Правила (показано: @FilteredRules.Count / @_rules.Count)</h5>
+        <button class="btn btn-sm btn-outline-primary" @onclick="() => _addRuleOpen = !_addRuleOpen">➕ Добавить правило</button>
+    </div>
+
+    @if (_addRuleOpen)
+    {
+        <div class="card card-body mb-3 border-primary">
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <label class="form-label form-label-sm mb-0">Keyword</label>
+                    <input class="form-control form-control-sm" @bind="_newRule.Keyword" placeholder="например: экология" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">Category</label>
+                    <input class="form-control form-control-sm" @bind="_newRule.Category" placeholder="Eco_Topic" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">ScoreType</label>
+                    <select class="form-select form-select-sm" @bind="_newRule.ScoreType">
+                        <option>eco</option>
+                        <option>belarus</option>
+                    </select>
+                </div>
+                <div class="col-md-1">
+                    <label class="form-label form-label-sm mb-0">Weight</label>
+                    <input class="form-control form-control-sm" type="number" step="0.01" @bind="_newRule.Weight" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">SearchContext</label>
+                    <select class="form-select form-select-sm" @bind="_newRule.SearchContext">
+                        <option>any</option>
+                        <option>hashtags</option>
+                        <option>bio</option>
+                        <option>description</option>
+                    </select>
+                </div>
+                <div class="col-md-1">
+                    <label class="form-label form-label-sm mb-0">MaxMatches</label>
+                    <input class="form-control form-control-sm" type="number" @bind="_newRule.MaxMatches" />
+                </div>
+                <div class="col-md-1 d-flex align-items-end gap-2">
+                    <div class="form-check mt-1">
+                        <input type="checkbox" class="form-check-input" id="newRuleActive" @bind="_newRule.IsActive" />
+                        <label class="form-check-label small" for="newRuleActive">Active</label>
+                    </div>
+                </div>
+            </div>
+            @if (_addRuleError != null)
+            {
+                <div class="text-danger small mt-1">@_addRuleError</div>
+            }
+            <div class="mt-2 d-flex gap-2">
+                <button class="btn btn-sm btn-primary" @onclick="AddRule">✓ Сохранить</button>
+                <button class="btn btn-sm btn-secondary" @onclick="() => { _addRuleOpen = false; _addRuleError = null; }">Отмена</button>
+            </div>
+        </div>
+    }
+
     <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
@@ -109,7 +169,47 @@ else
         </tbody>
     </table>
 
-    <h5 class="mt-4">Пороги (показано: @FilteredThresholds.Count / @_thresholds.Count)</h5>
+    <!-- ===== THRESHOLDS ===== -->
+    <div class="d-flex justify-content-between align-items-center mt-4 mb-1">
+        <h5 class="mb-0">Пороги (показано: @FilteredThresholds.Count / @_thresholds.Count)</h5>
+        <button class="btn btn-sm btn-outline-primary" @onclick="() => _addThresholdOpen = !_addThresholdOpen">➕ Добавить порог</button>
+    </div>
+
+    @if (_addThresholdOpen)
+    {
+        <div class="card card-body mb-3 border-primary">
+            <div class="row g-2">
+                <div class="col-md-3">
+                    <label class="form-label form-label-sm mb-0">Category</label>
+                    <input class="form-control form-control-sm" @bind="_newThreshold.Category" placeholder="Eco_Topic" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">ScoreType</label>
+                    <select class="form-select form-select-sm" @bind="_newThreshold.ScoreType">
+                        <option>eco</option>
+                        <option>belarus</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">MinMatchCount</label>
+                    <input class="form-control form-control-sm" type="number" @bind="_newThreshold.MinMatchCount" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label form-label-sm mb-0">ScoreBonus</label>
+                    <input class="form-control form-control-sm" type="number" step="0.01" @bind="_newThreshold.ScoreBonus" />
+                </div>
+            </div>
+            @if (_addThresholdError != null)
+            {
+                <div class="text-danger small mt-1">@_addThresholdError</div>
+            }
+            <div class="mt-2 d-flex gap-2">
+                <button class="btn btn-sm btn-primary" @onclick="AddThreshold">✓ Сохранить</button>
+                <button class="btn btn-sm btn-secondary" @onclick="() => { _addThresholdOpen = false; _addThresholdError = null; }">Отмена</button>
+            </div>
+        </div>
+    }
+
     <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
@@ -164,13 +264,20 @@ else
     string _filterCategory  = "";
     string _filterScoreType = "";
 
-    Guid?        _editRuleId;
-    ScoringRule? _editRule;
+    // inline edit
+    Guid?        _editRuleId;      ScoringRule?          _editRule;
+    Guid?        _editThresholdId; ScoringRuleThreshold? _editThreshold;
 
-    Guid?                 _editThresholdId;
-    ScoringRuleThreshold? _editThreshold;
+    // add rule form
+    bool    _addRuleOpen  = false;
+    string? _addRuleError;
+    ScoringRule _newRule  = new() { ScoreType = "eco", SearchContext = "any", MaxMatches = 1, IsActive = true };
 
-    // Вычисляемые свойства — вместо @{} в разметке
+    // add threshold form
+    bool    _addThresholdOpen  = false;
+    string? _addThresholdError;
+    ScoringRuleThreshold _newThreshold = new() { ScoreType = "eco" };
+
     List<ScoringRule> FilteredRules => _rules
         .Where(r => string.IsNullOrEmpty(_filterKeyword)   || r.Keyword.Contains(_filterKeyword,   StringComparison.OrdinalIgnoreCase))
         .Where(r => string.IsNullOrEmpty(_filterCategory)  || r.Category.Contains(_filterCategory,  StringComparison.OrdinalIgnoreCase))
@@ -202,11 +309,53 @@ else
         _loading = false;
     }
 
-    void ResetFilters()
+    void ResetFilters() { _filterKeyword = ""; _filterCategory = ""; _filterScoreType = ""; }
+
+    // ---- Add Rule ----
+    async Task AddRule()
     {
-        _filterKeyword = ""; _filterCategory = ""; _filterScoreType = "";
+        _addRuleError = null;
+        if (string.IsNullOrWhiteSpace(_newRule.Keyword))  { _addRuleError = "Keyword обязателен"; return; }
+        if (string.IsNullOrWhiteSpace(_newRule.Category)) { _addRuleError = "Category обязателен"; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ScoringRules.Add(new ScoringRule
+        {
+            Keyword       = _newRule.Keyword.Trim(),
+            Category      = _newRule.Category.Trim(),
+            ScoreType     = _newRule.ScoreType,
+            Weight        = _newRule.Weight,
+            SearchContext = _newRule.SearchContext,
+            MaxMatches    = _newRule.MaxMatches,
+            IsActive      = _newRule.IsActive
+        });
+        await db.SaveChangesAsync();
+        _newRule       = new() { ScoreType = "eco", SearchContext = "any", MaxMatches = 1, IsActive = true };
+        _addRuleOpen   = false;
+        await LoadAsync();
     }
 
+    // ---- Add Threshold ----
+    async Task AddThreshold()
+    {
+        _addThresholdError = null;
+        if (string.IsNullOrWhiteSpace(_newThreshold.Category)) { _addThresholdError = "Category обязателен"; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ScoringRuleThresholds.Add(new ScoringRuleThreshold
+        {
+            Category      = _newThreshold.Category.Trim(),
+            ScoreType     = _newThreshold.ScoreType,
+            MinMatchCount = _newThreshold.MinMatchCount,
+            ScoreBonus    = _newThreshold.ScoreBonus
+        });
+        await db.SaveChangesAsync();
+        _newThreshold      = new() { ScoreType = "eco" };
+        _addThresholdOpen  = false;
+        await LoadAsync();
+    }
+
+    // ---- Edit Rule ----
     void StartEditRule(ScoringRule r)
     {
         _editThresholdId = null; _editThreshold = null;
@@ -239,6 +388,7 @@ else
         await LoadAsync();
     }
 
+    // ---- Edit Threshold ----
     void StartEditThreshold(ScoringRuleThreshold t)
     {
         _editRuleId = null; _editRule = null;
@@ -272,6 +422,7 @@ else
         _editThresholdId = null; _editThreshold = null;
     }
 
+    // ---- Export / Import ----
     async Task ExportJson()
     {
         var profile = new ScoringProfileDto
