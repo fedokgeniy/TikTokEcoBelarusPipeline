@@ -1,5 +1,6 @@
 ﻿using TikTokEcoBelarus.Domain.Entities;
 using TikTokEcoBelarus.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 
 namespace TikTokEcoBelarus.Infrastructure;
 
@@ -14,7 +15,7 @@ public static class SeedData
 
     private static async Task SeedScoringRulesAsync(AppDbContext db)
     {
-        if (db.ScoringRules.Any()) return;
+        if (await db.ScoringRules.AnyAsync()) return;
 
         var rules = new List<ScoringRule>
         {
@@ -143,7 +144,7 @@ public static class SeedData
 
     private static async Task SeedScoringRuleThresholdsAsync(AppDbContext db)
     {
-        if (db.ScoringRuleThresholds.Any()) return;
+        if (await db.ScoringRuleThresholds.AnyAsync()) return;
 
         // Belarus_Language: 1 совпадение → +0.10, 2+ → +0.20
         db.ScoringRuleThresholds.AddRange(
@@ -156,7 +157,7 @@ public static class SeedData
 
     private static async Task SeedSearchQueriesAsync(AppDbContext db)
     {
-        if (db.SearchQueries.Any()) return;
+        if (await db.SearchQueries.AnyAsync()) return;
 
         db.SearchQueries.AddRange(
             new SearchQuery { QueryType = "hashtag", Value = "экология", Priority = 1 },
