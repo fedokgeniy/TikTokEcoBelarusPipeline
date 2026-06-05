@@ -1,4 +1,4 @@
-﻿@page "/videos"
+@page "/videos"
 @rendermode InteractiveServer
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
@@ -12,12 +12,14 @@
     <div class="col-md-2">
         <input class="form-control form-control-sm" placeholder="Мин EcoScore (0.1–1.0)"
                type="number" step="0.01" min="0" max="1"
-               @bind="_minEco" @bind:event="oninput" />
+               value="@_minEcoStr"
+               @onchange="e => { _minEcoStr = e.Value?.ToString(); _page = 0; _ = LoadAsync(); }" />
     </div>
     <div class="col-md-2">
         <input class="form-control form-control-sm" placeholder="Мин BelarusScore (0.1–1.0)"
                type="number" step="0.01" min="0" max="1"
-               @bind="_minBelarus" @bind:event="oninput" />
+               value="@_minBelarusStr"
+               @onchange="e => { _minBelarusStr = e.Value?.ToString(); _page = 0; _ = LoadAsync(); }" />
     </div>
     <div class="col-md-2">
         <input class="form-control form-control-sm" placeholder="Автор"
@@ -129,9 +131,9 @@ else
     string _sortField = "PublishedAt";
     bool _sortDesc    = true;
 
-    decimal? _minEco;
-    decimal? _minBelarus;
-    string?  _authorFilter;
+    string?   _minEcoStr;
+    string?   _minBelarusStr;
+    string?   _authorFilter;
     DateTime? _dateFrom;
 
     Video? _deleteTarget;
@@ -144,12 +146,21 @@ else
 
         var query = Db.Videos.AsQueryable();
 
-        if (_minEco.HasValue)
-            query = query.Where(v => v.EcoScore >= _minEco.Value);
-        if (_minBelarus.HasValue)
-            query = query.Where(v => v.BelarusScore >= _minBelarus.Value);
+        if (decimal.TryParse(_minEcoStr,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var minEco))
+            query = query.Where(v => v.EcoScore >= minEco);
+
+        if (decimal.TryParse(_minBelarusStr,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var minBelarus))
+            query = query.Where(v => v.BelarusScore >= minBelarus);
+
         if (!string.IsNullOrWhiteSpace(_authorFilter))
             query = query.Where(v => v.AuthorUniqueId.Contains(_authorFilter));
+
         if (_dateFrom.HasValue)
             query = query.Where(v => v.PublishedAt >= _dateFrom.Value);
 
@@ -186,8 +197,9 @@ else
 
     void ResetFilters()
     {
-        _minEco = null; _minBelarus = null; _dateFrom = null;
-        _authorFilter = null; _page = 0;
+        _minEcoStr = null; _minBelarusStr = null;
+        _dateFrom = null; _authorFilter = null;
+        _page = 0;
         _ = LoadAsync();
     }
 
