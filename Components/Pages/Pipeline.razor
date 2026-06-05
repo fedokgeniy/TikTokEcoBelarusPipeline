@@ -1,4 +1,4 @@
-﻿@page "/pipeline"
+@page "/pipeline"
 @rendermode InteractiveServer
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
@@ -33,6 +33,22 @@
             }
         }
     </div>
+
+    @if (_running)
+    {
+        <div class="mt-3">
+            <div class="d-flex justify-content-between small text-muted mb-1">
+                <span>@_progressMsg</span>
+                <span>@_progressCurrent / @_progressTotal запросов</span>
+            </div>
+            <div class="progress" style="height:20px">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                     style="width:@(_progressTotal > 0 ? (_progressCurrent * 100 / _progressTotal) : 5)%">
+                </div>
+            </div>
+            <div class="text-muted small mt-1">⏱ @((DateTime.UtcNow - _startedAt).ToString(@"mm\:ss")) прошло</div>
+        </div>
+    }
 
     @if (_result != null && !_result.Success)
     {
@@ -88,6 +104,12 @@ else
     PipelineRunResult? _result;
     List<QueryStat> _stats = [];
 
+    int      _progressCurrent;
+    int      _progressTotal;
+    string   _progressMsg = "";
+    DateTime _startedAt;
+    System.Threading.Timer? _timer;
+
     protected override async Task OnInitializedAsync() => await LoadStatsAsync();
 
     async Task LoadStatsAsync()
@@ -101,7 +123,8 @@ else
                 IsActive   = q.IsActive,
                 DateFrom   = q.DateFrom,
                 LastRunAt  = q.LastRunAt,
-                VideoCount = q.VideoLinks.Count
+                VideoCount = Db.Set<VideoSearchQueryLink>()
+                               .Count(l => l.SearchQueryId == q.Id)
             })
             .OrderBy(s => s.Value)
             .ToListAsync();
@@ -110,25 +133,42 @@ else
 
     async Task RunAsync()
     {
-        _running = true;
-        _result  = null;
+        _running         = true;
+        _result          = null;
+        _progressCurrent = 0;
+        _progressTotal   = 0;
+        _progressMsg     = "Инициализация...";
+        _startedAt       = DateTime.UtcNow;
         StateHasChanged();
+
+        _timer = new System.Threading.Timer(
+            _ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+
+        var progress = new Progress<PipelineProgress>(p =>
+        {
+            _progressCurrent = p.Current;
+            _progressTotal   = p.Total;
+            _progressMsg     = p.QueryName;
+            InvokeAsync(StateHasChanged);
+        });
 
         try
         {
-            _result = await Orchestrator.RunAsync();
+            _result = await Orchestrator.RunAsync(progress: progress);
         }
         catch (Exception ex)
         {
             _result = new PipelineRunResult
             {
                 Error      = ex.ToString(),
-                StartedAt  = DateTime.UtcNow,
+                StartedAt  = _startedAt,
                 FinishedAt = DateTime.UtcNow
             };
         }
         finally
         {
+            _timer?.Dispose();
+            _timer   = null;
             _running = false;
             await LoadStatsAsync();
             StateHasChanged();
@@ -137,11 +177,11 @@ else
 
     record QueryStat
     {
-        public string Value      { get; init; } = "";
-        public string QueryType  { get; init; } = "";
-        public bool IsActive     { get; init; }
-        public DateTime? DateFrom  { get; init; }
-        public DateTime? LastRunAt { get; init; }
-        public int VideoCount    { get; init; }
+        public string    Value      { get; init; } = "";
+        public string    QueryType  { get; init; } = "";
+        public bool      IsActive   { get; init; }
+        public DateTime? DateFrom   { get; init; }
+        public DateTime? LastRunAt  { get; init; }
+        public int       VideoCount { get; init; }
     }
 }
