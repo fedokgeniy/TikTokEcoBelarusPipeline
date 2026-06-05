@@ -23,6 +23,28 @@
     }
 </div>
 
+<!-- Фильтры -->
+<div class="row g-2 mb-3">
+    <div class="col-md-3">
+        <input class="form-control form-control-sm" placeholder="Поиск по Keyword"
+               @bind="_filterKeyword" @bind:event="oninput" />
+    </div>
+    <div class="col-md-3">
+        <input class="form-control form-control-sm" placeholder="Поиск по Category"
+               @bind="_filterCategory" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="_filterScoreType">
+            <option value="">(все ScoreType)</option>
+            <option value="eco">eco</option>
+            <option value="belarus">belarus</option>
+        </select>
+    </div>
+    <div class="col-md-1">
+        <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сброс</button>
+    </div>
+</div>
+
 @if (_loading)
 {
     <div class="d-flex align-items-center gap-2 text-muted">
@@ -33,7 +55,15 @@
 else
 {
     <!-- ===== RULES ===== -->
-    <h5 class="mt-2">Правила (всего: @_rules.Count)</h5>
+    @{
+        var filteredRules = _rules
+            .Where(r => string.IsNullOrEmpty(_filterKeyword)  || r.Keyword.Contains(_filterKeyword,  StringComparison.OrdinalIgnoreCase))
+            .Where(r => string.IsNullOrEmpty(_filterCategory) || r.Category.Contains(_filterCategory, StringComparison.OrdinalIgnoreCase))
+            .Where(r => string.IsNullOrEmpty(_filterScoreType)|| r.ScoreType == _filterScoreType)
+            .OrderBy(r => r.ScoreType).ThenBy(r => r.Category)
+            .ToList();
+    }
+    <h5 class="mt-2">Правила (показано: @filteredRules.Count / @_rules.Count)</h5>
     <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
@@ -42,7 +72,7 @@ else
             </tr>
         </thead>
         <tbody>
-            @foreach (var r in _rules.OrderBy(r => r.ScoreType).ThenBy(r => r.Category))
+            @foreach (var r in filteredRules)
             {
                 if (_editRuleId == r.Id)
                 {
@@ -82,9 +112,7 @@ else
                         <td><code>@r.SearchContext</code></td>
                         <td>@r.MaxMatches</td>
                         <td>@(r.IsActive ? "✓" : "✗")</td>
-                        <td>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditRule(r)">✏️</button>
-                        </td>
+                        <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditRule(r)">✏️</button></td>
                     </tr>
                 }
             }
@@ -92,7 +120,14 @@ else
     </table>
 
     <!-- ===== THRESHOLDS ===== -->
-    <h5 class="mt-4">Пороги (всего: @_thresholds.Count)</h5>
+    @{
+        var filteredThresholds = _thresholds
+            .Where(t => string.IsNullOrEmpty(_filterCategory)  || t.Category.Contains(_filterCategory,  StringComparison.OrdinalIgnoreCase))
+            .Where(t => string.IsNullOrEmpty(_filterScoreType) || t.ScoreType == _filterScoreType)
+            .OrderBy(t => t.ScoreType).ThenBy(t => t.Category)
+            .ToList();
+    }
+    <h5 class="mt-4">Пороги (показано: @filteredThresholds.Count / @_thresholds.Count)</h5>
     <table class="table table-sm table-hover align-middle">
         <thead class="table-dark">
             <tr>
@@ -100,7 +135,7 @@ else
             </tr>
         </thead>
         <tbody>
-            @foreach (var t in _thresholds.OrderBy(t => t.ScoreType).ThenBy(t => t.Category))
+            @foreach (var t in filteredThresholds)
             {
                 if (_editThresholdId == t.Id)
                 {
@@ -127,9 +162,7 @@ else
                         <td><span class="badge @(t.ScoreType=="belarus" ? "bg-warning text-dark" : "bg-success")">@t.ScoreType</span></td>
                         <td>@t.MinMatchCount</td>
                         <td>@t.ScoreBonus</td>
-                        <td>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditThreshold(t)">✏️</button>
-                        </td>
+                        <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEditThreshold(t)">✏️</button></td>
                     </tr>
                 }
             }
@@ -145,13 +178,18 @@ else
     List<ScoringRule>          _rules      = [];
     List<ScoringRuleThreshold> _thresholds = [];
 
-    // inline edit state — rules
-    Guid?        _editRuleId;
-    ScoringRule? _editRule;      // копия для редактирования
+    // фильтры
+    string _filterKeyword   = "";
+    string _filterCategory  = "";
+    string _filterScoreType = "";
 
-    // inline edit state — thresholds
-    Guid?                   _editThresholdId;
-    ScoringRuleThreshold?   _editThreshold;
+    // inline edit — rules
+    Guid?        _editRuleId;
+    ScoringRule? _editRule;
+
+    // inline edit — thresholds
+    Guid?                 _editThresholdId;
+    ScoringRuleThreshold? _editThreshold;
 
     static readonly JsonSerializerOptions _exportOptions = new()
     {
@@ -171,10 +209,15 @@ else
         _loading = false;
     }
 
+    void ResetFilters()
+    {
+        _filterKeyword = ""; _filterCategory = ""; _filterScoreType = "";
+    }
+
     // ---- Rule edit ----
     void StartEditRule(ScoringRule r)
     {
-        _editThresholdId = null; _editThreshold = null;  // закрываем если была открыта threshold
+        _editThresholdId = null; _editThreshold = null;
         _editRuleId = r.Id;
         _editRule   = new ScoringRule
         {
@@ -193,9 +236,18 @@ else
     async Task SaveRule()
     {
         if (_editRule == null) return;
+        var saved = _editRule;
         await using var db = await DbFactory.CreateDbContextAsync();
-        db.ScoringRules.Update(_editRule);
-        await db.SaveChangesAsync();
+        await db.ScoringRules
+            .Where(r => r.Id == saved.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Keyword,       saved.Keyword)
+                .SetProperty(r => r.Category,      saved.Category)
+                .SetProperty(r => r.ScoreType,     saved.ScoreType)
+                .SetProperty(r => r.Weight,        saved.Weight)
+                .SetProperty(r => r.SearchContext, saved.SearchContext)
+                .SetProperty(r => r.MaxMatches,    saved.MaxMatches)
+                .SetProperty(r => r.IsActive,      saved.IsActive));
         CancelEdit();
         await LoadAsync();
     }
@@ -218,9 +270,15 @@ else
     async Task SaveThreshold()
     {
         if (_editThreshold == null) return;
+        var saved = _editThreshold;
         await using var db = await DbFactory.CreateDbContextAsync();
-        db.ScoringRuleThresholds.Update(_editThreshold);
-        await db.SaveChangesAsync();
+        await db.ScoringRuleThresholds
+            .Where(t => t.Id == saved.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.Category,      saved.Category)
+                .SetProperty(t => t.ScoreType,     saved.ScoreType)
+                .SetProperty(t => t.MinMatchCount, saved.MinMatchCount)
+                .SetProperty(t => t.ScoreBonus,    saved.ScoreBonus));
         CancelEdit();
         await LoadAsync();
     }
@@ -254,7 +312,6 @@ else
                 ScoreBonus    = t.ScoreBonus
             }).ToList()
         };
-
         var json  = JsonSerializer.Serialize(profile, _exportOptions);
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
         var b64   = Convert.ToBase64String(bytes);
@@ -263,47 +320,33 @@ else
 
     async Task ImportJson(InputFileChangeEventArgs e)
     {
-        _importMsg   = null;
-        _importError = false;
+        _importMsg = null; _importError = false;
         try
         {
-            using var stream  = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
+            using var stream = e.File.OpenReadStream(maxAllowedSize: 1024 * 1024);
             var profile = await JsonSerializer.DeserializeAsync<ScoringProfileDto>(stream,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
             if (profile == null) throw new Exception("Пустой файл");
 
             await using var db = await DbFactory.CreateDbContextAsync();
             await db.ScoringRules.ExecuteDeleteAsync();
             await db.ScoringRuleThresholds.ExecuteDeleteAsync();
-
             db.ScoringRules.AddRange(profile.Rules.Select(r => new ScoringRule
             {
-                Keyword       = r.Keyword,
-                Category      = r.Category,
-                ScoreType     = r.ScoreType,
-                Weight        = r.Weight,
-                SearchContext = r.SearchContext,
-                MaxMatches    = r.MaxMatches,
-                IsActive      = r.IsActive
+                Keyword = r.Keyword, Category = r.Category, ScoreType = r.ScoreType,
+                Weight  = r.Weight,  SearchContext = r.SearchContext,
+                MaxMatches = r.MaxMatches, IsActive = r.IsActive
             }));
             db.ScoringRuleThresholds.AddRange(profile.Thresholds.Select(t => new ScoringRuleThreshold
             {
-                Category      = t.Category,
-                ScoreType     = t.ScoreType,
-                MinMatchCount = t.MinMatchCount,
-                ScoreBonus    = t.ScoreBonus
+                Category = t.Category, ScoreType = t.ScoreType,
+                MinMatchCount = t.MinMatchCount, ScoreBonus = t.ScoreBonus
             }));
-
             await db.SaveChangesAsync();
             _importMsg = $"✓ Загружено: {profile.Rules.Count} правил, {profile.Thresholds.Count} порогов";
             await LoadAsync();
         }
-        catch (Exception ex)
-        {
-            _importError = true;
-            _importMsg   = $"Ошибка: {ex.Message}";
-        }
+        catch (Exception ex) { _importError = true; _importMsg = $"Ошибка: {ex.Message}"; }
     }
 
     record ScoringProfileDto
