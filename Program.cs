@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using TikTokEcoBelarus.Infrastructure;
 using TikTokEcoBelarus.Infrastructure.Repositories;
 using TikTokEcoBelarus.Pipeline;
@@ -8,19 +8,25 @@ const string apiKey = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Blazor Server ──────────────────────────────────────────────
+// ── Blazor Server ─────────────────────────────────────────────
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// ── БД ────────────────────────────────────────────────────────
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+// ── БД ──────────────────────────────────────────────────────
+var connectionString = builder.Configuration.GetConnectionString("Default");
 
-// ── Кэш и HTTP ────────────────────────────────────────────────
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+// Фабрика контекстов — нужна для Blazor-страниц (Videos, Scoring)
+builder.Services.AddDbContextFactory<AppDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+// ── Кэш и HTTP ────────────────────────────────────────────
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 
-// ── Репозитории и сервисы ──────────────────────────────────────
+// ── Репозитории и сервисы ──────────────────────────────────
 builder.Services.AddSingleton<PipelineOrchestrator>();
 builder.Services.AddScoped<IScoringRuleRepository, ScoringRuleRepository>();
 builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
