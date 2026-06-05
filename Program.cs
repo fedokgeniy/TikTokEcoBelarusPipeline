@@ -1,24 +1,27 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using TikTokEcoBelarus.Infrastructure;
 using TikTokEcoBelarus.Pipeline;
 using TikTokEcoBelarus.Services;
 
 const string apiKey = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
 
 using IHost host = Host.CreateDefaultBuilder(args)
-    .ConfigureServices(services =>
+    .ConfigureServices((context, services) =>
     {
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseNpgsql(context.Configuration.GetConnectionString("Default")));
+
         services.AddHttpClient();
-
         services.AddSingleton<BelarusEcoScorer>();
-
         services.AddSingleton<TikTokApiClient>(sp =>
         {
             var factory = sp.GetRequiredService<IHttpClientFactory>();
             var httpClient = factory.CreateClient();
             return new TikTokApiClient(httpClient, apiKey);
         });
-
         services.AddSingleton<CollectionPipeline>();
         services.AddSingleton<CsvExportService>();
     })
