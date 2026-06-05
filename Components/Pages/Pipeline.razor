@@ -10,6 +10,37 @@
 <h4 class="mb-3">⚙️ Pipeline</h4>
 
 <div class="card p-3 mb-4">
+    <!-- Пороги -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label mb-1">
+                🇧🇾 Порог Belarus Score
+                <span class="badge bg-secondary ms-1">@_minBelarus.ToString("F2")</span>
+            </label>
+            <input type="range" class="form-range" min="0" max="1" step="0.01"
+                   @bind="_minBelarus" @bind:event="oninput" disabled="@_running" />
+            <div class="d-flex justify-content-between small text-muted"><span>0.00</span><span>1.00</span></div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label mb-1">
+                🌿 Порог Eco Score
+                <span class="badge bg-secondary ms-1">@_minEco.ToString("F2")</span>
+            </label>
+            <input type="range" class="form-range" min="0" max="1" step="0.01"
+                   @bind="_minEco" @bind:event="oninput" disabled="@_running" />
+            <div class="d-flex justify-content-between small text-muted"><span>0.00</span><span>1.00</span></div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label mb-1">
+                📊 Макс. видео на запрос
+                <span class="badge bg-secondary ms-1">@_maxPerQuery</span>
+            </label>
+            <input type="range" class="form-range" min="1" max="50" step="1"
+                   @bind="_maxPerQuery" @bind:event="oninput" disabled="@_running" />
+            <div class="d-flex justify-content-between small text-muted"><span>1</span><span>50</span></div>
+        </div>
+    </div>
+
     <div class="d-flex align-items-center gap-3 flex-wrap">
         <button class="btn btn-primary" @onclick="RunAsync" disabled="@_running">
             @if (_running)
@@ -52,9 +83,7 @@
 
     @if (_result != null && !_result.Success)
     {
-        <div class="alert alert-danger mt-2 small" style="white-space:pre-wrap">
-            @_result.Error
-        </div>
+        <div class="alert alert-danger mt-2 small" style="white-space:pre-wrap">@_result.Error</div>
     }
 </div>
 
@@ -103,6 +132,10 @@ else
     bool _running = false;
     PipelineRunResult? _result;
     List<QueryStat> _stats = [];
+
+    double _minBelarus  = 0.3;
+    double _minEco      = 0.3;
+    int    _maxPerQuery = 5;
 
     int      _progressCurrent;
     int      _progressTotal;
@@ -154,7 +187,10 @@ else
 
         try
         {
-            _result = await Orchestrator.RunAsync(progress: progress);
+            _result = await Orchestrator.RunAsync(
+                minBelarus: _minBelarus,
+                minEco:     _minEco,
+                progress:   progress);
         }
         catch (Exception ex)
         {
