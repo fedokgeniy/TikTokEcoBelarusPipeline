@@ -13,52 +13,24 @@
 
     <!-- Пороги -->
     <div class="row g-3 mb-2">
-        <!-- Belarus -->
         <div class="col-md-4">
             <label class="form-label mb-1">🇧🇾 Порог Belarus Score</label>
-            <div class="d-flex align-items-center gap-2">
-                <input type="range" class="form-range flex-grow-1" min="0" max="1" step="0.01"
-                       value="@_draftBelarus"
-                       @oninput="e => _draftBelarus = SafeDouble(e.Value)"
-                       disabled="@_running" />
-                <input type="number" class="form-control form-control-sm" style="width:80px"
-                       min="0" max="1" step="0.01"
-                       value="@_draftBelarus"
-                       @oninput="e => _draftBelarus = SafeDouble(e.Value)"
-                       disabled="@_running" />
-            </div>
+            <input type="number" class="form-control" min="0" max="1" step="0.01"
+                   @bind="_draftBelarus" disabled="@_running" />
         </div>
-        <!-- Eco -->
         <div class="col-md-4">
             <label class="form-label mb-1">🌿 Порог Eco Score</label>
-            <div class="d-flex align-items-center gap-2">
-                <input type="range" class="form-range flex-grow-1" min="0" max="1" step="0.01"
-                       value="@_draftEco"
-                       @oninput="e => _draftEco = SafeDouble(e.Value)"
-                       disabled="@_running" />
-                <input type="number" class="form-control form-control-sm" style="width:80px"
-                       min="0" max="1" step="0.01"
-                       value="@_draftEco"
-                       @oninput="e => _draftEco = SafeDouble(e.Value)"
-                       disabled="@_running" />
-            </div>
+            <input type="number" class="form-control" min="0" max="1" step="0.01"
+                   @bind="_draftEco" disabled="@_running" />
         </div>
-        <!-- MaxPerQuery -->
         <div class="col-md-4">
             <label class="form-label mb-1">📊 Макс. видео на запрос</label>
-            <div class="d-flex align-items-center gap-2">
-                <input type="range" class="form-range flex-grow-1" min="1" max="1000" step="1"
-                       @bind="_draftMax" @bind:event="oninput"
-                       disabled="@_running" />
-                <input type="number" class="form-control form-control-sm" style="width:80px"
-                       min="1" max="1000" step="1"
-                       @bind="_draftMax" @bind:event="oninput"
-                       disabled="@_running" />
-            </div>
+            <input type="number" class="form-control" min="1" max="1000" step="1"
+                   @bind="_draftMax" disabled="@_running" />
         </div>
     </div>
 
-    <!-- Бадж текущих значений + кнопка Apply -->
+    <!-- Примененные значения + кнопки -->
     <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
         <span class="text-muted small">
             Текущие пороги:
@@ -69,11 +41,15 @@
         @if (HasDraftChanges)
         {
             <button class="btn btn-sm btn-warning" @onclick="ApplyThresholds" disabled="@_running">
-                ✓ Применить пороги
+                ✓ Сохранить пороги
             </button>
             <button class="btn btn-sm btn-outline-secondary" @onclick="ResetDraft" disabled="@_running">
                 ✕ Отмена
             </button>
+        }
+        @if (_settingsSaved)
+        {
+            <span class="text-success small">✓ Сохранено</span>
         }
     </div>
 
@@ -157,15 +133,16 @@ else
 @code {
     bool _loading = true;
     bool _running = false;
+    bool _settingsSaved = false;
     PipelineRunResult? _result;
     List<QueryStat> _stats = [];
 
-    // Применённые значения (используются при запуске)
+    // Применённые (из БД)
     double _minBelarus  = 0.3;
     double _minEco      = 0.3;
     int    _maxPerQuery = 5;
 
-    // Черновик редактирования
+    // Черновик
     double _draftBelarus;
     double _draftEco;
     int    _draftMax;
@@ -183,13 +160,37 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _draftBelarus = _minBelarus;
-        _draftEco     = _minEco;
-        _draftMax     = _maxPerQuery;
+        await LoadSettingsAsync();
         await LoadStatsAsync();
     }
 
-    void ApplyThresholds()
+    async Task LoadSettingsAsync()
+    {
+        var keys = new[] { "minBelarus", "minEco", "maxPerQuery" };
+        var rows = await Db.AppSettings
+            .Where(s => keys.Contains(s.Key))
+            .ToDictionaryAsync(s => s.Key, s => s.Value);
+
+        if (rows.TryGetValue("minBelarus", out var v1) &&
+            double.TryParse(v1, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var d1))
+            _minBelarus = d1;
+
+        if (rows.TryGetValue("minEco", out var v2) &&
+            double.TryParse(v2, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var d2))
+            _minEco = d2;
+
+        if (rows.TryGetValue("maxPerQuery", out var v3) &&
+            int.TryParse(v3, out var i3))
+            _maxPerQuery = i3;
+
+        _draftBelarus = _minBelarus;
+        _draftEco     = _minEco;
+        _draftMax     = _maxPerQuery;
+    }
+
+    async Task ApplyThresholds()
     {
         _minBelarus  = Math.Clamp(_draftBelarus, 0, 1);
         _minEco      = Math.Clamp(_draftEco,     0, 1);
@@ -197,6 +198,25 @@ else
         _draftBelarus = _minBelarus;
         _draftEco     = _minEco;
         _draftMax     = _maxPerQuery;
+
+        await UpsertSetting("minBelarus",  _minBelarus.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
+        await UpsertSetting("minEco",      _minEco.ToString("F2",     System.Globalization.CultureInfo.InvariantCulture));
+        await UpsertSetting("maxPerQuery", _maxPerQuery.ToString());
+
+        _settingsSaved = true;
+        StateHasChanged();
+        await Task.Delay(2000);
+        _settingsSaved = false;
+    }
+
+    async Task UpsertSetting(string key, string value)
+    {
+        var row = await Db.AppSettings.FindAsync(key);
+        if (row == null)
+            Db.AppSettings.Add(new AppSetting { Key = key, Value = value });
+        else
+            row.Value = value;
+        await Db.SaveChangesAsync();
     }
 
     void ResetDraft()
@@ -205,10 +225,6 @@ else
         _draftEco     = _minEco;
         _draftMax     = _maxPerQuery;
     }
-
-    static double SafeDouble(object? v) =>
-        double.TryParse(v?.ToString(), System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
 
     async Task LoadStatsAsync()
     {
@@ -230,8 +246,7 @@ else
 
     async Task RunAsync()
     {
-        // Автоматически применяем черновик если не подтверждён
-        if (HasDraftChanges) ApplyThresholds();
+        if (HasDraftChanges) await ApplyThresholds();
 
         _running         = true;
         _result          = null;
