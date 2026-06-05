@@ -15,12 +15,9 @@ builder.Services.AddRazorComponents()
 // ── БД ──────────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("Default");
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
-
-// Фабрика контекстов — нужна для Blazor-страниц (Videos, Scoring)
+// AddDbContextFactory с явным Scoped — без конфликта lifetime
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString), ServiceLifetime.Scoped);
 
 // ── Кэш и HTTP ────────────────────────────────────────────
 builder.Services.AddMemoryCache();
