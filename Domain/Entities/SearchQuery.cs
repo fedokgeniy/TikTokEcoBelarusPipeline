@@ -7,6 +7,7 @@ public class SearchQuery
     public string Value { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
     public int Priority { get; set; } = 0;
+    public DateTime? DateFrom { get; set; }                 // видео не старше этой даты
     public DateTime? LastRunAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

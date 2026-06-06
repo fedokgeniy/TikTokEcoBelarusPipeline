@@ -1,0 +1,11 @@
+﻿@namespace TikTokEcoBelarus.Components
+@using Microsoft.AspNetCore.Components.Routing
+
+<Router AppAssembly="@typeof(App).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)" />
+    </Found>
+    <NotFound>
+        <p>Страница не найдена.</p>
+    </NotFound>
+</Router>

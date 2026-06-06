@@ -1,0 +1,22 @@
+﻿@inherits LayoutComponentBase
+
+<div class="d-flex" style="min-height: 100vh;">
+
+    <!-- Боковое меню -->
+    <nav class="d-flex flex-column p-3 text-white"
+         style="width:220px; background:#1a1a2e; min-height:100vh;">
+        <div class="mb-4 fw-bold fs-5">🌿 Eco Belarus</div>
+        <a href="/" class="nav-link text-white mb-1">📊 Дашборд</a>
+        <a href="/videos" class="nav-link text-white mb-1">🎬 Видео</a>
+        <a href="/queries" class="nav-link text-white mb-1">🔍 Запросы</a>
+        <a href="/hashtags" class="nav-link text-white mb-1">🏷️ Хэштеги</a>
+        <a href="/pipeline" class="nav-link text-white mb-1">⚙️ Pipeline</a>
+        <a href="/scoring" class="nav-link text-white mb-1">⚖️ Скоринг</a>
+    </nav>
+
+    <!-- Основной контент -->
+    <main class="flex-grow-1 p-4 bg-light">
+        @Body
+    </main>
+
+</div>

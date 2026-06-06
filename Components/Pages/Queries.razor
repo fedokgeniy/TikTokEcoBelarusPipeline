@@ -1,0 +1,135 @@
+﻿@page "/queries"
+@rendermode InteractiveServer
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-3">🔍 Поисковые запросы</h4>
+
+<!-- Добавить новый -->
+<div class="card mb-4 p-3">
+    <h6>Добавить запрос</h6>
+    <div class="row g-2">
+        <div class="col-md-2">
+            <select class="form-select form-select-sm" @bind="_newType">
+                <option value="hashtag">hashtag</option>
+                <option value="keyword">keyword</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <input class="form-control form-control-sm" placeholder="Значение" @bind="_newValue" />
+        </div>
+        <div class="col-md-2">
+            <input type="date" class="form-control form-control-sm"
+                   @bind="_newDateFrom" />
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-sm btn-success w-100" @onclick="AddQueryAsync">+ Добавить</button>
+        </div>
+    </div>
+</div>
+
+<!-- Список -->
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>Тип</th>
+                <th>Значение</th>
+                <th>Видео не старше</th>
+                <th>Последний запуск</th>
+                <th>Активен</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var q in _queries)
+            {
+                <tr class="@(!q.IsActive ? "text-muted" : "")">
+                    <td><span class="badge bg-secondary">@q.QueryType</span></td>
+                    <td>@q.Value</td>
+                    <td>
+                        <input type="date" class="form-control form-control-sm"
+                               style="width:150px"
+                               value="@(q.DateFrom?.ToString("yyyy-MM-dd") ?? "")"
+                               @onchange="e => UpdateDateFrom(q, e.Value?.ToString())" />
+                    </td>
+                    <td>@(q.LastRunAt?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
+                    <td>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox"
+                                   checked="@q.IsActive"
+                                   @onchange="() => ToggleAsync(q)" />
+                        </div>
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger"
+                                @onclick="() => DeleteAsync(q)">✕</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    List<SearchQuery> _queries = [];
+    bool _loading = true;
+
+    string _newType    = "hashtag";
+    string _newValue   = "";
+    DateTime? _newDateFrom;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _queries = await Db.SearchQueries.OrderBy(q => q.Priority).ToListAsync();
+        _loading = false;
+    }
+
+    async Task ToggleAsync(SearchQuery q)
+    {
+        q.IsActive = !q.IsActive;
+        await Db.SaveChangesAsync();
+    }
+
+    async Task UpdateDateFrom(SearchQuery q, string? value)
+    {
+        q.DateFrom = DateTime.TryParse(value, out var d) ? d : null;
+        await Db.SaveChangesAsync();
+    }
+
+    async Task AddQueryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newValue)) return;
+
+        Db.SearchQueries.Add(new SearchQuery
+        {
+            QueryType = _newType,
+            Value     = _newValue.Trim(),
+            DateFrom  = _newDateFrom,
+            Priority  = _queries.Count + 1,
+            IsActive  = true
+        });
+        await Db.SaveChangesAsync();
+
+        _newValue   = "";
+        _newDateFrom = null;
+        await LoadAsync();
+    }
+
+    async Task DeleteAsync(SearchQuery q)
+    {
+        Db.SearchQueries.Remove(q);
+        await Db.SaveChangesAsync();
+        await LoadAsync();
+    }
+}

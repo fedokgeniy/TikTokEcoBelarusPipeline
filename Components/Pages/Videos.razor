@@ -1,0 +1,266 @@
+@page "/videos"
+@rendermode InteractiveServer
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject IJSRuntime JS
+
+<h4 class="mb-3">🎬 Видео</h4>
+
+<div class="row g-2 mb-3">
+    <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Мин EcoScore (0.1–1.0)"
+               type="number" step="0.01" min="0" max="1"
+               value="@_minEcoStr"
+               @onchange="e => OnFilterChanged(nameof(_minEcoStr), e.Value?.ToString())" />
+    </div>
+    <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Мин BelarusScore (0.1–1.0)"
+               type="number" step="0.01" min="0" max="1"
+               value="@_minBelarusStr"
+               @onchange="e => OnFilterChanged(nameof(_minBelarusStr), e.Value?.ToString())" />
+    </div>
+    <div class="col-md-2">
+        <input class="form-control form-control-sm" placeholder="Автор"
+               value="@_authorFilter"
+               @onchange="e => OnFilterChanged(nameof(_authorFilter), e.Value?.ToString())" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" class="form-control form-control-sm"
+               title="Дата публикации — от"
+               @bind="_dateFrom" />
+    </div>
+    <div class="col-md-1">
+        <button class="btn btn-sm btn-primary w-100" @onclick="SearchClicked">Найти</button>
+    </div>
+    <div class="col-md-1">
+        <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сбросить</button>
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-sm btn-danger w-100" @onclick="ConfirmDeleteAll">🗑 Удалить все</button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="d-flex align-items-center gap-2 text-muted my-3">
+        <div class="spinner-border spinner-border-sm"></div>
+        <span>Загрузка...</span>
+    </div>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted small">Найдено: @_total видео</span>
+    </div>
+
+    <table class="table table-hover table-sm">
+        <thead class="table-dark">
+            <tr>
+                <th @onclick='() => SetSort("AuthorUniqueId")' style="cursor:pointer">Автор @SortIcon("AuthorUniqueId")</th>
+                <th>Описание</th>
+                <th>Ключевые слова</th>
+                <th @onclick='() => SetSort("EcoScore")' style="cursor:pointer">EcoScore @SortIcon("EcoScore")</th>
+                <th @onclick='() => SetSort("BelarusScore")' style="cursor:pointer">BelarusScore @SortIcon("BelarusScore")</th>
+                <th @onclick='() => SetSort("ViewCount")' style="cursor:pointer">Просмотры @SortIcon("ViewCount")</th>
+                <th @onclick='() => SetSort("LikeCount")' style="cursor:pointer">Лайки @SortIcon("LikeCount")</th>
+                <th @onclick='() => SetSort("PublishedAt")' style="cursor:pointer">Публикация @SortIcon("PublishedAt")</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var v in _videos)
+            {
+                <tr>
+                    <td><a href="@v.VideoUrl" target="_blank">@@v.AuthorUniqueId</a></td>
+                    <td style="max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
+                        title="@v.Description">@v.Description</td>
+                    <td style="max-width:200px">
+                        @foreach (var kw in v.MatchedKeywords.Take(5))
+                        {
+                            <span class="badge bg-info text-dark me-1">@kw</span>
+                        }
+                        @if (v.MatchedKeywords.Length > 5)
+                        {
+                            <span class="text-muted small">+@(v.MatchedKeywords.Length - 5)</span>
+                        }
+                    </td>
+                    <td><span class="badge bg-success">@v.EcoScore.ToString("F2")</span></td>
+                    <td><span class="badge bg-warning text-dark">@v.BelarusScore.ToString("F2")</span></td>
+                    <td>@v.ViewCount.ToString("N0")</td>
+                    <td>@v.LikeCount.ToString("N0")</td>
+                    <td>@(v.PublishedAt?.ToString("dd.MM.yyyy") ?? "—")</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmDelete(v)">🗑</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-outline-primary" @onclick="PrevPage" disabled="@(_page == 0)">←</button>
+        <span>Страница @(_page + 1)</span>
+        <button class="btn btn-sm btn-outline-primary" @onclick="NextPage" disabled="@(!_hasMore)">→</button>
+    </div>
+}
+
+@if (_deleteTarget != null)
+{
+    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h6 class="modal-title">Удалить видео?</h6>
+                </div>
+                <div class="modal-body small">
+                    @@_deleteTarget.AuthorUniqueId — @_deleteTarget.Description[..Math.Min(60, _deleteTarget.Description.Length)]...
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteConfirmed">Удалить</button>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => _deleteTarget = null">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_confirmDeleteAll)
+{
+    <div class="modal show d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h6 class="modal-title">⚠️ Удалить ВСЕ видео?</h6>
+                </div>
+                <div class="modal-body small">
+                    Будет удалено <strong>@_total</strong> видео. Это действие необратимо.
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteAllConfirmed">Удалить все</button>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => _confirmDeleteAll = false">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    List<Video> _videos = [];
+    bool    _loading         = true;
+    bool    _confirmDeleteAll = false;
+    int     _page            = 0;
+    int     _total;
+    bool    _hasMore;
+    const int PageSize       = 20;
+
+    string _sortField = "PublishedAt";
+    bool   _sortDesc  = true;
+
+    string?   _minEcoStr;
+    string?   _minBelarusStr;
+    string?   _authorFilter;
+    DateTime? _dateFrom;
+
+    Video? _deleteTarget;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    void OnFilterChanged(string field, string? value)
+    {
+        if (field == nameof(_minEcoStr))     _minEcoStr     = value;
+        if (field == nameof(_minBelarusStr)) _minBelarusStr = value;
+        if (field == nameof(_authorFilter))  _authorFilter  = value;
+    }
+
+    async Task SearchClicked() { _page = 0; await LoadAsync(); }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = db.Videos.AsNoTracking().AsQueryable();
+
+        if (decimal.TryParse(_minEcoStr,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var minEco))
+            query = query.Where(v => v.EcoScore >= minEco);
+
+        if (decimal.TryParse(_minBelarusStr,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var minBelarus))
+            query = query.Where(v => v.BelarusScore >= minBelarus);
+
+        if (!string.IsNullOrWhiteSpace(_authorFilter))
+            query = query.Where(v => v.AuthorUniqueId.Contains(_authorFilter));
+
+        if (_dateFrom.HasValue)
+            query = query.Where(v => v.PublishedAt >= _dateFrom.Value);
+
+        _total   = await query.CountAsync();
+        _hasMore = (_page + 1) * PageSize < _total;
+
+        query = _sortField switch
+        {
+            "EcoScore"       => _sortDesc ? query.OrderByDescending(v => v.EcoScore)       : query.OrderBy(v => v.EcoScore),
+            "BelarusScore"   => _sortDesc ? query.OrderByDescending(v => v.BelarusScore)   : query.OrderBy(v => v.BelarusScore),
+            "ViewCount"      => _sortDesc ? query.OrderByDescending(v => v.ViewCount)      : query.OrderBy(v => v.ViewCount),
+            "LikeCount"      => _sortDesc ? query.OrderByDescending(v => v.LikeCount)      : query.OrderBy(v => v.LikeCount),
+            "PublishedAt"    => _sortDesc ? query.OrderByDescending(v => v.PublishedAt)    : query.OrderBy(v => v.PublishedAt),
+            "AuthorUniqueId" => _sortDesc ? query.OrderByDescending(v => v.AuthorUniqueId) : query.OrderBy(v => v.AuthorUniqueId),
+            _                => query.OrderByDescending(v => v.PublishedAt)
+        };
+
+        _videos  = await query.Skip(_page * PageSize).Take(PageSize).ToListAsync();
+        _loading = false;
+    }
+
+    void SetSort(string field)
+    {
+        if (_sortField == field) _sortDesc = !_sortDesc;
+        else { _sortField = field; _sortDesc = true; }
+        _page = 0;
+        InvokeAsync(LoadAsync);
+    }
+
+    string SortIcon(string field) => _sortField == field ? (_sortDesc ? "↓" : "↑") : "";
+
+    async Task PrevPage() { if (_page > 0) { _page--; await LoadAsync(); } }
+    async Task NextPage() { _page++; await LoadAsync(); }
+
+    void ResetFilters()
+    {
+        _minEcoStr = null; _minBelarusStr = null;
+        _dateFrom  = null; _authorFilter  = null;
+        _page = 0;
+        InvokeAsync(LoadAsync);
+    }
+
+    void ConfirmDelete(Video v)   => _deleteTarget    = v;
+    void ConfirmDeleteAll()       => _confirmDeleteAll = true;
+
+    async Task DeleteConfirmed()
+    {
+        if (_deleteTarget == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.Videos.Remove(_deleteTarget);
+        await db.SaveChangesAsync();
+        _deleteTarget = null;
+        await LoadAsync();
+    }
+
+    async Task DeleteAllConfirmed()
+    {
+        _confirmDeleteAll = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Set<VideoSearchQueryLink>().ExecuteDeleteAsync();
+        await db.Videos.ExecuteDeleteAsync();
+        _page = 0;
+        await LoadAsync();
+    }
+}
