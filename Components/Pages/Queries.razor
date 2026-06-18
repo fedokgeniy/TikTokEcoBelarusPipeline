@@ -1,4 +1,4 @@
-﻿@page "/queries"
+@page "/queries"
 @rendermode InteractiveServer
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
@@ -37,6 +37,17 @@
 }
 else
 {
+    <div class="d-flex gap-2 mb-2">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="DisableAllAsync"
+                disabled="@(_queries.All(q => !q.IsActive))">
+            ⏸ Отключить все
+        </button>
+        <button class="btn btn-sm btn-outline-success" @onclick="EnableAllAsync"
+                disabled="@(_queries.All(q => q.IsActive))">
+            ▶ Включить все
+        </button>
+    </div>
+
     <table class="table table-sm table-hover">
         <thead class="table-dark">
             <tr>
@@ -98,6 +109,20 @@ else
     async Task ToggleAsync(SearchQuery q)
     {
         q.IsActive = !q.IsActive;
+        await Db.SaveChangesAsync();
+    }
+
+    async Task DisableAllAsync()
+    {
+        foreach (var q in _queries)
+            q.IsActive = false;
+        await Db.SaveChangesAsync();
+    }
+
+    async Task EnableAllAsync()
+    {
+        foreach (var q in _queries)
+            q.IsActive = true;
         await Db.SaveChangesAsync();
     }
 
