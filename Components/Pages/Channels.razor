@@ -76,7 +76,7 @@ else
                 <tr class="@(!ch.IsActive ? "text-muted" : "")" style="cursor:pointer"
                     @onclick="() => ToggleDetails(ch.Id)">
                     <td>
-                        <a href="https://www.tiktok.com/@@{ch.UniqueId}" target="_blank"
+                        <a href="@($"https://www.tiktok.com/@{ch.UniqueId}")" target="_blank"
                            @onclick:stopPropagation="true"
                            rel="noopener noreferrer">@@@ch.UniqueId</a>
                     </td>
@@ -133,7 +133,7 @@ else
                                         {
                                             <tr>
                                                 <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                                                    <a href="https://www.tiktok.com/@@{ch.UniqueId}/video/@v.VideoId"
+                                                    <a href="@($"https://www.tiktok.com/@{ch.UniqueId}/video/{v.VideoId}")"
                                                        target="_blank" rel="noopener noreferrer"
                                                        title="@v.Description">@(v.Description?.Length > 60 ? v.Description[..60] + "…" : v.Description ?? "—")</a>
                                                 </td>
