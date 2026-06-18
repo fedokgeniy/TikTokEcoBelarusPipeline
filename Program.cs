@@ -27,8 +27,10 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<PipelineOrchestrator>();
 builder.Services.AddScoped<IScoringRuleRepository, ScoringRuleRepository>();
 builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
+builder.Services.AddScoped<ITrackedChannelRepository, TrackedChannelRepository>();
 builder.Services.AddScoped<BelarusEcoScorer>();
 builder.Services.AddScoped<CollectionPipeline>();
+builder.Services.AddScoped<ChannelMonitorPipeline>();
 builder.Services.AddScoped<CsvExportService>();
 
 builder.Services.AddSingleton<TikTokApiClient>(sp =>
