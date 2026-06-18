@@ -12,11 +12,11 @@ public class CollectionPipeline(
     public async Task<List<(ScoredVideo Scored, Guid QueryId)>> RunAsync(
         double minBelarus = 0.3,
         double minEco = 0.3,
-        int maxPerQuery = 5,
+        int maxPagesPerQuery = 10,   // FIX: переименовано с maxPerQuery — это кол-во СТРАНИЦ (~12 видео каждая)
         CancellationToken ct = default)
     {
         var queries = await searchQueryRepo.GetActiveQueriesAsync();
-        var seen = new HashSet<string>();
+        var seen    = new HashSet<string>();
         var results = new List<(ScoredVideo Scored, Guid QueryId)>();
 
         foreach (var query in queries.OrderBy(q => q.Priority))
@@ -26,15 +26,15 @@ public class CollectionPipeline(
             if (query.DateFrom.HasValue)
                 Console.WriteLine($"[FILTER] Видео не старше: {query.DateFrom.Value:yyyy-MM-dd}");
 
-            int fetched = 0;
-            int skippedAd = 0;
+            int fetched     = 0;
+            int skippedAd   = 0;
             int skippedDate = 0;
-            int scored = 0;
-            int passed = 0;
+            int scored      = 0;
+            int passed      = 0;
 
             var scoreLog = new List<string>();
 
-            await foreach (var item in api.SearchVideosAsync(query.Value, maxPerQuery, ct: ct))
+            await foreach (var item in api.SearchVideosAsync(query.Value, maxPagesPerQuery, ct: ct))
             {
                 fetched++;
 
@@ -78,7 +78,6 @@ public class CollectionPipeline(
                 $"fetched={fetched} skipped(ad/private)={skippedAd} skipped(date)={skippedDate} " +
                 $"scored={scored} passed={passed} (minBY={minBelarus:F2} minECO={minEco:F2})");
 
-            // Если ничего не прошло — печатаем все скоры чтобы видеть почему
             if (passed == 0 && scoreLog.Count > 0)
             {
                 Console.WriteLine($"[SCORES] Прошли порог 0/{scoreLog.Count}. Лучшие:");

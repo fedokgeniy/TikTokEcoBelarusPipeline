@@ -19,8 +19,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/info?uniqueId=username
-    // Возвращает videoCount + uid + share_url.
-    // Используется: при добавлении канала и при каждой проверке videoCount.
     // ---------------------------------------------------------------
     public async Task<TikTokUserInfo?> GetUserInfoAsync(
         string uniqueId,
@@ -41,13 +39,11 @@ public class TikTokApiClient
             var statsNode    = userInfoNode.GetProperty("stats");
             var userNode     = userInfoNode.GetProperty("user");
 
-            int    videoCount  = statsNode.GetProperty("videoCount").GetInt32();
-            string? userId     = userNode.TryGetProperty("id",        out var idEl)  ? idEl.GetString()  : null;
-            string? nickname   = userNode.TryGetProperty("nickname",   out var nnEl)  ? nnEl.GetString()  : null;
+            int    videoCount   = statsNode.GetProperty("videoCount").GetInt32();
+            string? userId      = userNode.TryGetProperty("id",       out var idEl) ? idEl.GetString()  : null;
+            string? nickname    = userNode.TryGetProperty("nickname",  out var nnEl) ? nnEl.GetString()  : null;
             string? avatarThumb = TryGetFirstUrl(userNode, "avatarThumb");
-
-            // share_url живёт в userInfo.user — нет, строим сами по uniqueId
-            string  profileUrl = $"https://www.tiktok.com/@{uniqueId}";
+            string  profileUrl  = $"https://www.tiktok.com/@{uniqueId}";
 
             Console.WriteLine($"[USER INFO] @{uniqueId} uid={userId} videos={videoCount}");
 
@@ -71,9 +67,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/info-by-id?userId=UID
-    // Возвращает nickname, avatar, share_url, unique_id.
-    // НЕ содержит videoCount — используй GetUserInfoAsync для него.
-    // Используется: для обогащения данных канала (разовое при добавлении).
     // ---------------------------------------------------------------
     public async Task<TikTokUserInfo?> GetUserInfoByIdAsync(
         string userId,
@@ -90,11 +83,10 @@ public class TikTokApiClient
             var doc      = JsonDocument.Parse(body);
             var userNode = doc.RootElement.GetProperty("user");
 
-            string? uniqueId   = userNode.TryGetProperty("unique_id",  out var uidEl)  ? uidEl.GetString()  : null;
-            string? nickname   = userNode.TryGetProperty("nickname",   out var nnEl)   ? nnEl.GetString()   : null;
+            string? uniqueId    = userNode.TryGetProperty("unique_id", out var uidEl) ? uidEl.GetString() : null;
+            string? nickname    = userNode.TryGetProperty("nickname",  out var nnEl)  ? nnEl.GetString()  : null;
             string? avatarThumb = TryGetFirstJpegUrl(userNode, "avatar_thumb");
 
-            // share_info.share_url — прямая ссылка на профиль
             string? profileUrl = null;
             if (userNode.TryGetProperty("share_info", out var shareInfo)
              && shareInfo.TryGetProperty("share_url", out var shareUrlEl))
@@ -109,7 +101,7 @@ public class TikTokApiClient
                 Nickname    = nickname,
                 AvatarThumb = avatarThumb,
                 ProfileUrl  = profileUrl,
-                VideoCount  = 0  // не доступен в этом endpoint
+                VideoCount  = 0
             };
         }
         catch (Exception ex)
@@ -122,37 +114,42 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/search/video?keyword=... (paginated)
+    //
+    // FIX: убран search_id — API игнорирует его и всегда возвращает ""
+    //      в поле extra.search_request_id, из-за чего searchId никогда
+    //      не обновлялся. Пагинация работает только через cursor.
+    // FIX: maxPages увеличен с 5 до 10 (~120 видео за запрос вместо 60).
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
-        int maxPages = 5,
+        int maxPages = 10,
         int delayMs = 1500,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         long cursor = 0;
-        string searchId = "0";
-        int page = 0;
+        int  page   = 0;
 
         while (page < maxPages)
         {
+            // search_id убран — достаточно cursor для пагинации
             var url = $"{BaseUrl}/api/search/video" +
                       $"?keyword={Uri.EscapeDataString(keyword)}" +
-                      $"&cursor={cursor}" +
-                      $"&search_id={searchId}";
+                      $"&cursor={cursor}";
 
-            Console.WriteLine($"[SEARCH] GET {url}");
+            Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} GET {url}");
 
             var body = await SafeGetStringAsync(url, ct);
             if (body is null) break;
 
-            Models.TikTokSearchResponse? response;
+            TikTokSearchResponse? response;
             try
             {
-                response = System.Text.Json.JsonSerializer.Deserialize<Models.TikTokSearchResponse>(body);
+                response = JsonSerializer.Deserialize<TikTokSearchResponse>(body);
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[SEARCH PARSE ERROR] {ex.Message}");
+                Console.Error.WriteLine($"Body: {body[..Math.Min(500, body.Length)]}");
                 break;
             }
 
@@ -162,15 +159,16 @@ public class TikTokApiClient
                 break;
             }
 
-            Console.WriteLine($"[SEARCH OK] {response.ItemList.Count} items, has_more={response.HasMore}");
+            Console.WriteLine(
+                $"[SEARCH OK] Page {page + 1}: {response.ItemList.Count} items, " +
+                $"cursor={response.Cursor}, has_more={response.HasMore}");
 
             foreach (var item in response.ItemList)
                 yield return item;
 
             if (!response.HasMoreItems) break;
 
-            cursor   = response.Cursor;
-            searchId = response.Extra?.SearchRequestId is { Length: > 0 } sid ? sid : searchId;
+            cursor = response.Cursor;
             page++;
             await Task.Delay(delayMs, ct);
         }
@@ -212,7 +210,6 @@ public class TikTokApiClient
     {
         if (!parent.TryGetProperty(propName, out var obj)) return null;
         if (!obj.TryGetProperty("url_list", out var list)) return null;
-        // Берём последний URL в списке — обычно jpeg (а не webp)
         var urls = list.EnumerateArray().Select(e => e.GetString()).Where(s => s != null).ToList();
         return urls.LastOrDefault();
     }
