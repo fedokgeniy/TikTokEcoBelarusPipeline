@@ -10,9 +10,9 @@ public class CollectionPipeline(
     ISearchQueryRepository searchQueryRepo)
 {
     public async Task<List<(ScoredVideo Scored, Guid QueryId)>> RunAsync(
-        double minBelarus = 0.3,
-        double minEco = 0.3,
-        int maxPagesPerQuery = 10,   // FIX: переименовано с maxPerQuery — это кол-во СТРАНИЦ (~12 видео каждая)
+        double minBelarus = 0.15,   // FIX: снижено с 0.3 — запросы типа "экология" дают BY=0.0–0.10
+        double minEco = 0.20,       // FIX: снижено с 0.3 — даём больше шансов нишевым запросам
+        int maxPagesPerQuery = 10,
         CancellationToken ct = default)
     {
         var queries = await searchQueryRepo.GetActiveQueriesAsync();
