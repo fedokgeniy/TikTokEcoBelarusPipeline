@@ -5,15 +5,15 @@ namespace TikTokEcoBelarus.Infrastructure.Repositories;
 
 public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelRepository
 {
-    public async Task<List<TrackedChannel>> GetAllAsync()
-        => await db.TrackedChannels
-            .OrderBy(c => c.CreatedAt)
-            .Include(c => c.Videos)
-            .ToListAsync();
+    public Task<List<TrackedChannel>> GetAllAsync()
+        => db.TrackedChannels
+             .OrderBy(c => c.CreatedAt)
+             .Include(c => c.Videos)
+             .ToListAsync();
 
-    public async Task<TrackedChannel?> GetByUniqueIdAsync(string uniqueId)
-        => await db.TrackedChannels
-            .FirstOrDefaultAsync(c => c.UniqueId == uniqueId);
+    public Task<TrackedChannel?> GetByUniqueIdAsync(string uniqueId)
+        => db.TrackedChannels
+             .FirstOrDefaultAsync(c => c.UniqueId == uniqueId);
 
     public async Task AddAsync(TrackedChannel channel)
     {
@@ -23,37 +23,42 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
 
     public async Task DeleteAsync(Guid id)
     {
-        var channel = await db.TrackedChannels.FindAsync(id);
-        if (channel is null) return;
-        db.TrackedChannels.Remove(channel);
+        var ch = await db.TrackedChannels.FindAsync(id);
+        if (ch is null) return;
+        db.TrackedChannels.Remove(ch);
         await db.SaveChangesAsync();
     }
 
-    public async Task SetActiveAsync(Guid id, bool isActive)
+    /// <summary>Обновляет метаданные: UserId, ProfileUrl, DisplayName, AvatarUrl.</summary>
+    public async Task SaveMetaAsync(TrackedChannel channel)
     {
-        var channel = await db.TrackedChannels.FindAsync(id);
-        if (channel is null) return;
-        channel.IsActive = isActive;
-        await db.SaveChangesAsync();
+        await db.TrackedChannels
+            .Where(c => c.Id == channel.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.UserId,      channel.UserId)
+                .SetProperty(c => c.ProfileUrl,  channel.ProfileUrl)
+                .SetProperty(c => c.DisplayName, channel.DisplayName)
+                .SetProperty(c => c.AvatarUrl,   channel.AvatarUrl));
     }
 
-    public async Task UpdateAfterCheckAsync(Guid id, int videoCount, int commentCount, DateTimeOffset checkedAt)
+    public async Task UpdateAfterCheckAsync(
+        Guid id, int videoCount, int commentCount, DateTimeOffset checkedAt)
     {
-        var channel = await db.TrackedChannels.FindAsync(id);
-        if (channel is null) return;
-        channel.LastVideoCount   = videoCount;
-        channel.LastCommentCount = commentCount;
-        channel.LastCheckedAt   = checkedAt;
-        await db.SaveChangesAsync();
+        await db.TrackedChannels
+            .Where(c => c.Id == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.LastVideoCount,   videoCount)
+                .SetProperty(c => c.LastCommentCount, commentCount)
+                .SetProperty(c => c.LastCheckedAt,    checkedAt));
     }
 
     public async Task SaveVideosAsync(Guid channelId, List<TrackedChannelVideo> videos)
     {
-        // Получаем уже сохранённые VideoId для этого канала
+        // Игнорируем дубликаты по VideoId
         var existingIds = await db.TrackedChannelVideos
             .Where(v => v.TrackedChannelId == channelId)
             .Select(v => v.VideoId)
-            .ToHashSetAsync();
+            .ToListAsync();
 
         var newVideos = videos
             .Where(v => !existingIds.Contains(v.VideoId))
