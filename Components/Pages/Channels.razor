@@ -16,7 +16,7 @@
     <h6>Добавить канал</h6>
     <div class="row g-2 align-items-end">
         <div class="col-md-3">
-            <label class="form-label form-label-sm mb-1">@username (без @)</label>
+            <label class="form-label form-label-sm mb-1">@@username (без @@)</label>
             <input class="form-control form-control-sm"
                    placeholder="например: ecobelarus"
                    @bind="_newUniqueId" />
@@ -61,7 +61,7 @@ else
     <table class="table table-sm table-hover">
         <thead class="table-dark">
             <tr>
-                <th>@username</th>
+                <th>@@username</th>
                 <th>Имя</th>
                 <th>Видео (последнее)</th>
                 <th>Комментарии (сумма)</th>
@@ -78,7 +78,7 @@ else
                     <td>
                         <a href="https://www.tiktok.com/@@{ch.UniqueId}" target="_blank"
                            @onclick:stopPropagation="true"
-                           rel="noopener noreferrer">@@{ch.UniqueId}</a>
+                           rel="noopener noreferrer">@@@ch.UniqueId</a>
                     </td>
                     <td>@(ch.DisplayName ?? "—")</td>
                     <td>
@@ -158,11 +158,11 @@ else
 
 @code {
     List<TrackedChannel> _channels = [];
-    bool   _loading       = true;
-    bool   _checking      = false;
-    string _newUniqueId   = "";
+    bool   _loading        = true;
+    bool   _checking       = false;
+    string _newUniqueId    = "";
     string _newDisplayName = "";
-    string _errorMessage  = "";
+    string _errorMessage   = "";
     Guid?  _expandedChannelId;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
