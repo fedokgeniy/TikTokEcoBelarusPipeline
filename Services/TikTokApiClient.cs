@@ -113,12 +113,14 @@ public class TikTokApiClient
     }
 
     // ---------------------------------------------------------------
-    // GET /api/search/video?keyword=... (paginated)
+    // GET /api/search/video?keyword=...
     //
-    // FIX: убран search_id — API игнорирует его и всегда возвращает ""
-    //      в поле extra.search_request_id, из-за чего searchId никогда
-    //      не обновлялся. Пагинация работает только через cursor.
-    // FIX: maxPages увеличен с 5 до 10 (~120 видео за запрос вместо 60).
+    // ПАГИНАЦИЯ: tiktok-api23 использует offset (0, 12, 24, ...),
+    // а НЕ cursor из тела ответа. cursor в ответе всегда равен offset
+    // следующей страницы, но API ожидает параметр именно "offset",
+    // не "cursor". Передача cursor возвращает пустой item_list со стр.2.
+    //
+    // Шаг = pageSize (обычно 12 видео на страницу).
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
@@ -126,17 +128,17 @@ public class TikTokApiClient
         int delayMs = 1500,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        long cursor = 0;
-        int  page   = 0;
+        int offset   = 0;
+        int pageSize = 12; // API возвращает 12 видео за запрос
+        int page     = 0;
 
         while (page < maxPages)
         {
-            // search_id убран — достаточно cursor для пагинации
             var url = $"{BaseUrl}/api/search/video" +
                       $"?keyword={Uri.EscapeDataString(keyword)}" +
-                      $"&cursor={cursor}";
+                      $"&offset={offset}";
 
-            Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} GET {url}");
+            Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} offset={offset} GET {url}");
 
             var body = await SafeGetStringAsync(url, ct);
             if (body is null) break;
@@ -155,7 +157,9 @@ public class TikTokApiClient
 
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
-                Console.WriteLine($"[SEARCH EMPTY] keyword=\"{keyword}\" cursor={cursor}");
+                // Логируем сырой ответ чтобы понять структуру при отладке
+                Console.WriteLine($"[SEARCH EMPTY] keyword=\"{keyword}\" offset={offset}");
+                Console.WriteLine($"[SEARCH EMPTY RAW] {body[..Math.Min(300, body.Length)]}");
                 break;
             }
 
@@ -168,7 +172,10 @@ public class TikTokApiClient
 
             if (!response.HasMoreItems) break;
 
-            cursor = response.Cursor;
+            // Следующий offset = текущий + количество полученных видео
+            // (используем реальный count, не фиксированный pageSize,
+            //  на случай если API вернул меньше 12)
+            offset += response.ItemList.Count;
             page++;
             await Task.Delay(delayMs, ct);
         }
@@ -197,7 +204,6 @@ public class TikTokApiClient
         return body;
     }
 
-    /// <summary>Для /api/user/info — avatarThumb это строка (jpeg URL).</summary>
     private static string? TryGetFirstUrl(JsonElement parent, string propName)
     {
         if (parent.TryGetProperty(propName, out var el) && el.ValueKind == JsonValueKind.String)
@@ -205,7 +211,6 @@ public class TikTokApiClient
         return null;
     }
 
-    /// <summary>Для /api/user/info-by-id — avatar_thumb это объект с url_list[].</summary>
     private static string? TryGetFirstJpegUrl(JsonElement parent, string propName)
     {
         if (!parent.TryGetProperty(propName, out var obj)) return null;
