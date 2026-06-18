@@ -17,10 +17,26 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.16")
+                .HasAnnotation("ProductVersion", "9.0.17")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.AppSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("AppSettings", (string)null);
+                });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.ScoringRule", b =>
                 {
@@ -63,7 +79,7 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 
                     b.HasIndex("IsActive");
 
-                    b.ToTable("ScoringRules");
+                    b.ToTable("ScoringRules", (string)null);
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.ScoringRuleThreshold", b =>
@@ -88,7 +104,7 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("ScoringRuleThresholds");
+                    b.ToTable("ScoringRuleThresholds", (string)null);
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.SearchQuery", b =>
@@ -122,7 +138,99 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("SearchQueries");
+                    b.ToTable("SearchQueries", (string)null);
+                });
+
+            modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.TrackedChannel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AvatarUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("LastCheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("LastCommentCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("LastVideoCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ProfileUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("UniqueId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("UserId")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UniqueId")
+                        .IsUnique();
+
+                    b.ToTable("TrackedChannels", (string)null);
+                });
+
+            modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.TrackedChannelVideo", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("CommentCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime>("FetchedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("LikeCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("PlayCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ShareCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("TrackedChannelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("VideoCreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VideoId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TrackedChannelId", "VideoId")
+                        .IsUnique();
+
+                    b.ToTable("TrackedChannelVideos", (string)null);
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.Video", b =>
@@ -193,7 +301,7 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 
                     b.HasKey("VideoId");
 
-                    b.ToTable("Videos");
+                    b.ToTable("Videos", (string)null);
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.VideoSearchQueryLink", b =>
@@ -208,7 +316,18 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 
                     b.HasIndex("SearchQueryId");
 
-                    b.ToTable("VideoSearchQueryLinks");
+                    b.ToTable("VideoSearchQueryLinks", (string)null);
+                });
+
+            modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.TrackedChannelVideo", b =>
+                {
+                    b.HasOne("TikTokEcoBelarus.Domain.Entities.TrackedChannel", "Channel")
+                        .WithMany("Videos")
+                        .HasForeignKey("TrackedChannelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Channel");
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.VideoSearchQueryLink", b =>
@@ -233,6 +352,11 @@ namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.SearchQuery", b =>
                 {
                     b.Navigation("VideoLinks");
+                });
+
+            modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.TrackedChannel", b =>
+                {
+                    b.Navigation("Videos");
                 });
 
             modelBuilder.Entity("TikTokEcoBelarus.Domain.Entities.Video", b =>
