@@ -13,5 +13,6 @@ public class TrackedChannelVideo
     public DateTimeOffset VideoCreatedAt { get; set; }
     public DateTime FetchedAt { get; set; } = DateTime.UtcNow;
 
-    public TrackedChannel Channel { get; set; } = default!;
+    public TrackedChannel Channel  { get; set; } = default!;
+    public ICollection<VideoComment> Comments { get; set; } = new List<VideoComment>();
 }

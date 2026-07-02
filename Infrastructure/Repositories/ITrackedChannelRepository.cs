@@ -11,7 +11,6 @@ public interface ITrackedChannelRepository
 
     /// <summary>
     /// Обновляет метаданные канала: UserId, ProfileUrl, DisplayName, AvatarUrl.
-    /// Вызывается один раз при первом резолве.
     /// </summary>
     Task SaveMetaAsync(TrackedChannel channel);
 
@@ -24,4 +23,15 @@ public interface ITrackedChannelRepository
     /// Добавляет / обновляет видео канала. Дубликаты по VideoId игнорируются.
     /// </summary>
     Task SaveVideosAsync(Guid channelId, List<TrackedChannelVideo> videos);
+
+    /// <summary>
+    /// Возвращает HashSet уже сохранённых VideoId для данного канала.
+    /// Используется для delta-фильтрации: не тянем видео, которые уже есть в БД.
+    /// </summary>
+    Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId);
+
+    /// <summary>
+    /// Сохраняет комментарии, игнорируя дубликаты по CommentId.
+    /// </summary>
+    Task SaveCommentsAsync(IEnumerable<VideoComment> comments);
 }

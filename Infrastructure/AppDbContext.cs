@@ -14,6 +14,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AppSetting>           AppSettings           => Set<AppSetting>();
     public DbSet<TrackedChannel>       TrackedChannels       => Set<TrackedChannel>();
     public DbSet<TrackedChannelVideo>  TrackedChannelVideos  => Set<TrackedChannelVideo>();
+    public DbSet<VideoComment>         VideoComments         => Set<VideoComment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -22,6 +23,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.ApplyConfiguration(new ScoringRuleConfiguration());
         modelBuilder.ApplyConfiguration(new TrackedChannelConfiguration());
         modelBuilder.ApplyConfiguration(new TrackedChannelVideoConfiguration());
+        modelBuilder.ApplyConfiguration(new VideoCommentConfiguration());
 
         modelBuilder.Entity<AppSetting>(b =>
         {

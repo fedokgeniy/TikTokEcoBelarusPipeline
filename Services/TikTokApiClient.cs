@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using TikTokEcoBelarus.Models;
 
@@ -116,20 +117,15 @@ public class TikTokApiClient
     // GET /api/search/video?keyword=...
     //
     // ПАГИНАЦИЯ: tiktok-api23 использует offset (0, 12, 24, ...),
-    // а НЕ cursor из тела ответа. cursor в ответе всегда равен offset
-    // следующей страницы, но API ожидает параметр именно "offset",
-    // не "cursor". Передача cursor возвращает пустой item_list со стр.2.
-    //
-    // Шаг = pageSize (обычно 12 видео на страницу).
+    // а НЕ cursor из тела ответа.
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
         int maxPages = 10,
         int delayMs = 1500,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         int offset   = 0;
-        int pageSize = 12; // API возвращает 12 видео за запрос
         int page     = 0;
 
         while (page < maxPages)
@@ -157,7 +153,6 @@ public class TikTokApiClient
 
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
-                // Логируем сырой ответ чтобы понять структуру при отладке
                 Console.WriteLine($"[SEARCH EMPTY] keyword=\"{keyword}\" offset={offset}");
                 Console.WriteLine($"[SEARCH EMPTY RAW] {body[..Math.Min(300, body.Length)]}");
                 break;
@@ -172,12 +167,67 @@ public class TikTokApiClient
 
             if (!response.HasMoreItems) break;
 
-            // Следующий offset = текущий + количество полученных видео
-            // (используем реальный count, не фиксированный pageSize,
-            //  на случай если API вернул меньше 12)
             offset += response.ItemList.Count;
             page++;
             await Task.Delay(delayMs, ct);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // GET /api/comment/list?videoId=...&count=N
+    //
+    // Возвращает последние N комментариев под видео.
+    // Вызывается только для новых видео (delta-логика в pipeline).
+    // ---------------------------------------------------------------
+    public async IAsyncEnumerable<TikTokComment> GetVideoCommentsAsync(
+        string videoId,
+        int count = 20,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/api/comment/list?videoId={Uri.EscapeDataString(videoId)}&count={count}";
+        Console.WriteLine($"[COMMENTS] GET {url}");
+
+        var body = await SafeGetStringAsync(url, ct);
+        if (body is null) yield break;
+
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(body); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[COMMENTS PARSE ERROR] videoId={videoId}: {ex.Message}");
+            Console.Error.WriteLine($"Body: {body[..Math.Min(500, body.Length)]}");
+            yield break;
+        }
+
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("comments", out var commentsArr)
+         || commentsArr.ValueKind != JsonValueKind.Array)
+        {
+            Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId} raw={body[..Math.Min(200, body.Length)]}");
+            yield break;
+        }
+
+        foreach (var c in commentsArr.EnumerateArray())
+        {
+            string? commentId  = c.TryGetProperty("cid",        out var cidEl)  ? cidEl.GetString()   : null;
+            string? text       = c.TryGetProperty("text",       out var textEl) ? textEl.GetString()  : null;
+            long    likeCount  = c.TryGetProperty("digg_count", out var lkEl)   ? lkEl.GetInt64()    : 0;
+            long    createTime = c.TryGetProperty("create_time",out var ctEl)   ? ctEl.GetInt64()    : 0;
+
+            string? authorId = null;
+            if (c.TryGetProperty("user", out var userEl))
+                authorId = userEl.TryGetProperty("unique_id", out var uidEl) ? uidEl.GetString() : null;
+
+            if (commentId is null || text is null) continue;
+
+            yield return new TikTokComment
+            {
+                CommentId      = commentId,
+                Text           = text,
+                AuthorUniqueId = authorId ?? string.Empty,
+                LikeCount      = likeCount,
+                CreatedAt      = DateTimeOffset.FromUnixTimeSeconds(createTime)
+            };
         }
     }
 

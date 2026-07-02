@@ -54,7 +54,6 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
 
     public async Task SaveVideosAsync(Guid channelId, List<TrackedChannelVideo> videos)
     {
-        // Игнорируем дубликаты по VideoId
         var existingIds = await db.TrackedChannelVideos
             .Where(v => v.TrackedChannelId == channelId)
             .Select(v => v.VideoId)
@@ -67,6 +66,37 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
         if (newVideos.Count == 0) return;
 
         db.TrackedChannelVideos.AddRange(newVideos);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Возвращает HashSet уже сохранённых VideoId для канала.
+    /// Используется в ChannelMonitorPipeline для delta-фильтрации.
+    /// </summary>
+    public Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId)
+        => db.TrackedChannelVideos
+             .Where(v => v.TrackedChannelId == channelId)
+             .Select(v => v.VideoId)
+             .ToHashSetAsync();
+
+    /// <summary>
+    /// Сохраняет комментарии, пропуская дубликаты по CommentId.
+    /// </summary>
+    public async Task SaveCommentsAsync(IEnumerable<VideoComment> comments)
+    {
+        var list = comments.ToList();
+        if (list.Count == 0) return;
+
+        var incomingIds  = list.Select(c => c.CommentId).ToList();
+        var existingKeys = await db.VideoComments
+            .Where(c => incomingIds.Contains(c.CommentId))
+            .Select(c => c.CommentId)
+            .ToHashSetAsync();
+
+        var toInsert = list.Where(c => !existingKeys.Contains(c.CommentId)).ToList();
+        if (toInsert.Count == 0) return;
+
+        db.VideoComments.AddRange(toInsert);
         await db.SaveChangesAsync();
     }
 }
