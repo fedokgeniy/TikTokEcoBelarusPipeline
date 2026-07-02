@@ -1,0 +1,258 @@
+@page "/comments"
+@rendermode InteractiveServer
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+
+<h4 class="mb-3">💬 Комментарии к видео</h4>
+
+<!-- Фильтры -->
+<div class="card mb-3 p-3">
+    <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label form-label-sm mb-1">Канал</label>
+            <select class="form-select form-select-sm" @bind="_selectedChannelId" @bind:after="LoadAsync">
+                <option value="">— Все каналы —</option>
+                @foreach (var ch in _channels)
+                {
+                    <option value="@ch.Id">@@@ch.UniqueId @(ch.DisplayName is not null ? $"({ch.DisplayName})" : "")</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label form-label-sm mb-1">Поиск по тексту</label>
+            <input class="form-control form-control-sm" placeholder="Ключевое слово..."
+                   @bind="_searchText" @bind:after="LoadAsync" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label form-label-sm mb-1">Сортировка</label>
+            <select class="form-select form-select-sm" @bind="_sortBy" @bind:after="LoadAsync">
+                <option value="date">По дате ↓</option>
+                <option value="likes">По лайкам ↓</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сбросить</button>
+        </div>
+    </div>
+</div>
+
+<!-- Счётчик -->
+@if (!_loading)
+{
+    <p class="text-muted small mb-2">Найдено: <strong>@_totalCount</strong> комментариев</p>
+}
+
+<!-- Таблица -->
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else if (_comments.Count == 0)
+{
+    <div class="text-center text-muted py-5">
+        <div style="font-size:2rem;">💬</div>
+        <p class="mt-2">Комментарии не найдены.<br/>Запустите проверку каналов на странице <a href="/channels">📡 Каналы</a>.</p>
+    </div>
+}
+else
+{
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>Канал</th>
+                <th>Видео</th>
+                <th style="max-width:400px">Текст комментария</th>
+                <th>Автор</th>
+                <th>❤ Лайки</th>
+                <th>Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var c in _comments)
+            {
+                <tr>
+                    <td>
+                        <a href="@($"https://www.tiktok.com/@{c.ChannelUniqueId}")" target="_blank"
+                           rel="noopener noreferrer" class="text-decoration-none">
+                            @@@c.ChannelUniqueId
+                        </a>
+                    </td>
+                    <td>
+                        <a href="@($"https://www.tiktok.com/@{c.ChannelUniqueId}/video/{c.VideoId}")" 
+                           target="_blank" rel="noopener noreferrer"
+                           class="text-decoration-none text-truncate d-inline-block"
+                           style="max-width:160px" title="@c.VideoDescription">
+                            @(c.VideoDescription?.Length > 30 ? c.VideoDescription[..30] + "…" : c.VideoDescription ?? c.VideoId)
+                        </a>
+                    </td>
+                    <td style="max-width:380px">
+                        <span title="@c.Text">@(c.Text.Length > 120 ? c.Text[..120] + "…" : c.Text)</span>
+                    </td>
+                    <td>
+                        <a href="@($"https://www.tiktok.com/@{c.AuthorUniqueId}")" target="_blank"
+                           rel="noopener noreferrer" class="text-muted text-decoration-none">
+                            @@@c.AuthorUniqueId
+                        </a>
+                    </td>
+                    <td>
+                        @if (c.LikeCount > 0)
+                        {
+                            <span class="badge bg-danger">@c.LikeCount.ToString("N0")</span>
+                        }
+                        else { <span class="text-muted">—</span> }
+                    </td>
+                    <td class="text-muted small">@c.CommentCreatedAt.ToString("dd.MM.yy HH:mm")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <!-- Пагинация -->
+    @if (_totalCount > _pageSize)
+    {
+        <div class="d-flex gap-2 align-items-center mt-2">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="PrevPage" disabled="@(_page == 0)">← Назад</button>
+            <span class="text-muted small">Стр. @(_page + 1) / @((_totalCount + _pageSize - 1) / _pageSize)</span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="NextPage" disabled="@((_page + 1) * _pageSize >= _totalCount)">Вперёд →</button>
+        </div>
+    }
+}
+
+@code {
+    record CommentRow(
+        string VideoId,
+        string? VideoDescription,
+        string ChannelUniqueId,
+        string CommentId,
+        string Text,
+        string AuthorUniqueId,
+        long LikeCount,
+        DateTimeOffset CommentCreatedAt
+    );
+
+    List<TrackedChannel> _channels  = [];
+    List<CommentRow>     _comments  = [];
+    bool   _loading          = true;
+    string _selectedChannelId = "";
+    string _searchText       = "";
+    string _sortBy           = "date";
+    int    _page             = 0;
+    int    _pageSize         = 50;
+    int    _totalCount       = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _channels = await Db.TrackedChannels.OrderBy(c => c.UniqueId).ToListAsync();
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _page    = 0;
+        StateHasChanged();
+
+        var query = Db.VideoComments
+            .Include(c => c.Video)
+                .ThenInclude(v => v.Channel)
+            .AsQueryable();
+
+        // Фильтр по каналу
+        if (Guid.TryParse(_selectedChannelId, out var chId))
+            query = query.Where(c => c.Video.TrackedChannelId == chId);
+
+        // Поиск по тексту
+        if (!string.IsNullOrWhiteSpace(_searchText))
+            query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
+
+        _totalCount = await query.CountAsync();
+
+        // Сортировка
+        query = _sortBy == "likes"
+            ? query.OrderByDescending(c => c.LikeCount)
+            : query.OrderByDescending(c => c.CommentCreatedAt);
+
+        var raw = await query
+            .Skip(_page * _pageSize)
+            .Take(_pageSize)
+            .Select(c => new {
+                c.VideoId,
+                VideoDescription = c.Video.Description,
+                ChannelUniqueId  = c.Video.Channel.UniqueId,
+                c.CommentId,
+                c.Text,
+                c.AuthorUniqueId,
+                c.LikeCount,
+                c.CommentCreatedAt
+            })
+            .ToListAsync();
+
+        _comments = raw.Select(r => new CommentRow(
+            r.VideoId, r.VideoDescription, r.ChannelUniqueId,
+            r.CommentId, r.Text, r.AuthorUniqueId, r.LikeCount, r.CommentCreatedAt
+        )).ToList();
+
+        _loading = false;
+    }
+
+    async Task PrevPage()
+    {
+        if (_page > 0) { _page--; await FetchPageAsync(); }
+    }
+
+    async Task NextPage()
+    {
+        if ((_page + 1) * _pageSize < _totalCount) { _page++; await FetchPageAsync(); }
+    }
+
+    async Task FetchPageAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        var query = Db.VideoComments
+            .Include(c => c.Video).ThenInclude(v => v.Channel)
+            .AsQueryable();
+
+        if (Guid.TryParse(_selectedChannelId, out var chId))
+            query = query.Where(c => c.Video.TrackedChannelId == chId);
+        if (!string.IsNullOrWhiteSpace(_searchText))
+            query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
+
+        query = _sortBy == "likes"
+            ? query.OrderByDescending(c => c.LikeCount)
+            : query.OrderByDescending(c => c.CommentCreatedAt);
+
+        var raw = await query
+            .Skip(_page * _pageSize)
+            .Take(_pageSize)
+            .Select(c => new {
+                c.VideoId,
+                VideoDescription = c.Video.Description,
+                ChannelUniqueId  = c.Video.Channel.UniqueId,
+                c.CommentId,
+                c.Text,
+                c.AuthorUniqueId,
+                c.LikeCount,
+                c.CommentCreatedAt
+            })
+            .ToListAsync();
+
+        _comments = raw.Select(r => new CommentRow(
+            r.VideoId, r.VideoDescription, r.ChannelUniqueId,
+            r.CommentId, r.Text, r.AuthorUniqueId, r.LikeCount, r.CommentCreatedAt
+        )).ToList();
+
+        _loading = false;
+    }
+
+    void ResetFilters()
+    {
+        _selectedChannelId = "";
+        _searchText        = "";
+        _sortBy            = "date";
+        _ = LoadAsync();
+    }
+}
