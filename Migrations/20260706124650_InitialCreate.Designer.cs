@@ -9,11 +9,11 @@ using TikTokEcoBelarus.Infrastructure;
 
 #nullable disable
 
-namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
+namespace TikTokEcoBelarusPipeline.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260702211303_AddVideoComments")]
-    partial class AddVideoComments
+    [Migration("20260706124650_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
