@@ -12,7 +12,7 @@ using TikTokEcoBelarus.Infrastructure;
 namespace TikTokEcoBelarusPipeline.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260702205719_AddVideoComments")]
+    [Migration("20260702211303_AddVideoComments")]
     partial class AddVideoComments
     {
         /// <inheritdoc />
