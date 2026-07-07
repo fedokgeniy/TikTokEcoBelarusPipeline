@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace TikTokEcoBelarus.Models;
 
@@ -72,8 +72,28 @@ public class TikTokItem
     public DateTimeOffset CreatedAt =>
         DateTimeOffset.FromUnixTimeSeconds(CreateTime);
 
-    public List<string> AllHashtags =>
-        Challenges.Select(c => c.Title.ToLower()).ToList();
+    // FIX: объединяем хештеги из обоих источников.
+    // Challenges содержит полные объекты хештегов (приходит в search API).
+    // TextExtra содержит hashtagName (тип 1) — дополнительный источник.
+    // Дубликаты убираем через Distinct.
+    public List<string> AllHashtags
+    {
+        get
+        {
+            var fromChallenges = Challenges
+                .Select(c => c.Title.ToLower())
+                .Where(t => !string.IsNullOrWhiteSpace(t));
+
+            var fromTextExtra = TextExtra
+                .Where(t => t.Type == 1 && !string.IsNullOrWhiteSpace(t.HashtagName))
+                .Select(t => t.HashtagName.ToLower());
+
+            return fromChallenges
+                .Concat(fromTextExtra)
+                .Distinct()
+                .ToList();
+        }
+    }
 }
 
 // ── Автор ───────────────────────────────────────────────────

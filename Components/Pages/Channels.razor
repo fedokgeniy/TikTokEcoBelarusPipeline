@@ -1,0 +1,343 @@
+@page "/channels"
+@rendermode InteractiveServer
+@using TikTokEcoBelarus.Domain.Entities
+@using TikTokEcoBelarus.Infrastructure
+@using TikTokEcoBelarus.Infrastructure.Repositories
+@using TikTokEcoBelarus.Pipeline
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject ITrackedChannelRepository ChannelRepo
+@inject ChannelMonitorPipeline MonitorPipeline
+
+<h4 class="mb-3">📡 Отслеживаемые каналы</h4>
+
+<!-- Форма добавления -->
+<div class="card mb-4 p-3">
+    <h6>Добавить канал</h6>
+    <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label form-label-sm mb-1">@@username (без @@)</label>
+            <input class="form-control form-control-sm"
+                   placeholder="например: ecobelarus"
+                   @bind="_newUniqueId" />
+        </div>
+        <div class="col-md-3">
+            <label class="form-label form-label-sm mb-1">Отображаемое имя (необязательно)</label>
+            <input class="form-control form-control-sm"
+                   placeholder="Eco Belarus"
+                   @bind="_newDisplayName" />
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-sm btn-success w-100" @onclick="AddChannelAsync">+ Добавить</button>
+        </div>
+        <div class="col-md-3">
+            <button class="btn btn-sm btn-outline-primary w-100"
+                    @onclick="RunCheckAsync"
+                    disabled="@_checking">
+                @(_checking ? "Проверяю..." : "▶ Запустить проверку")
+            </button>
+        </div>
+    </div>
+    @if (!string.IsNullOrEmpty(_errorMessage))
+    {
+        <div class="alert alert-danger mt-2 mb-0 py-1 px-2">@_errorMessage</div>
+    }
+</div>
+
+<!-- Список каналов -->
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else if (_channels.Count == 0)
+{
+    <div class="text-center text-muted py-5">
+        <div style="font-size:2rem;">📭</div>
+        <p class="mt-2">Нет отслеживаемых каналов.<br/>Добавьте первый канал выше.</p>
+    </div>
+}
+else
+{
+    <table class="table table-sm table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>@@username</th>
+                <th>Имя</th>
+                <th>Видео (последнее)</th>
+                <th>Комментарии (сумма)</th>
+                <th>Последняя проверка</th>
+                <th>Активен</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var ch in _channels)
+            {
+                <tr class="@(!ch.IsActive ? "text-muted" : "")" style="cursor:pointer"
+                    @onclick="() => ToggleChannel(ch.Id)">
+                    <td>
+                        <a href="@($"https://www.tiktok.com/@{ch.UniqueId}")" target="_blank"
+                           @onclick:stopPropagation="true"
+                           rel="noopener noreferrer">@@@ch.UniqueId</a>
+                    </td>
+                    <td>@(ch.DisplayName ?? "—")</td>
+                    <td>
+                        @if (ch.LastVideoCount.HasValue)
+                        {
+                            <span class="badge bg-secondary">@ch.LastVideoCount</span>
+                        }
+                        else { <span class="text-muted">—</span> }
+                    </td>
+                    <td>
+                        @if (ch.LastCommentCount.HasValue)
+                        {
+                            <span class="badge bg-info text-dark">@ch.LastCommentCount</span>
+                        }
+                        else { <span class="text-muted">—</span> }
+                    </td>
+                    <td>@(ch.LastCheckedAt?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
+                    <td>
+                        <div class="form-check form-switch" @onclick:stopPropagation="true">
+                            <input class="form-check-input" type="checkbox"
+                                   checked="@ch.IsActive"
+                                   @onchange="() => ToggleActiveAsync(ch)" />
+                        </div>
+                    </td>
+                    <td @onclick:stopPropagation="true">
+                        <button class="btn btn-sm btn-outline-danger"
+                                @onclick="() => DeleteAsync(ch)">✕</button>
+                    </td>
+                </tr>
+
+                <!-- Раскрытые видео канала -->
+                @if (_expandedChannelId == ch.Id && ch.Videos.Count > 0)
+                {
+                    <tr>
+                        <td colspan="7" class="p-0">
+                            <div class="p-3 bg-white border-top">
+                                <h6 class="mb-2">🎬 Последние видео @@@ch.UniqueId</h6>
+                                <table class="table table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th></th>
+                                            <th>Описание</th>
+                                            <th>👁 Просмотры</th>
+                                            <th>❤ Лайки</th>
+                                            <th>💬 Комм.</th>
+                                            <th>↗ Репосты</th>
+                                            <th>Дата видео</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var v in ch.Videos.OrderByDescending(v => v.VideoCreatedAt).Take(10))
+                                        {
+                                            var videoKey = (ch.Id, v.VideoId);
+                                            <tr style="cursor:pointer" @onclick="() => ToggleComments(ch.Id, v.VideoId)">
+                                                <td style="width:24px">
+                                                    <span class="text-muted" style="font-size:.75rem">
+                                                        @(_expandedVideoKey == videoKey ? "▼" : "▶")
+                                                    </span>
+                                                </td>
+                                                <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                                                    <a href="@($"https://www.tiktok.com/@{ch.UniqueId}/video/{v.VideoId}")"
+                                                       target="_blank" rel="noopener noreferrer"
+                                                       @onclick:stopPropagation="true"
+                                                       title="@v.Description">
+                                                        @(v.Description?.Length > 55 ? v.Description[..55] + "…" : v.Description ?? "—")
+                                                    </a>
+                                                </td>
+                                                <td>@v.PlayCount.ToString("N0")</td>
+                                                <td>@v.LikeCount.ToString("N0")</td>
+                                                <td>
+                                                    <span class="badge bg-info text-dark">@v.CommentCount.ToString("N0")</span>
+                                                </td>
+                                                <td>@v.ShareCount.ToString("N0")</td>
+                                                <td>@v.VideoCreatedAt.ToString("dd.MM.yy")</td>
+                                            </tr>
+
+                                            <!-- Комментарии к видео (третий уровень) -->
+                                            @if (_expandedVideoKey == videoKey)
+                                            {
+                                                <tr>
+                                                    <td colspan="7" class="p-0">
+                                                        <div class="px-4 py-2" style="background:#f8f9ff;border-top:1px solid #dee2e6">
+                                                            @if (_commentsLoading)
+                                                            {
+                                                                <p class="text-muted small mb-0">Загрузка комментариев...</p>
+                                                            }
+                                                            else if (_expandedComments.Count == 0)
+                                                            {
+                                                                <p class="text-muted small mb-0">💬 Комментарии не найдены для этого видео.</p>
+                                                            }
+                                                            else
+                                                            {
+                                                                <p class="text-muted small mb-2">💬 <strong>@_expandedComments.Count</strong> комментариев (последние)</p>
+                                                                <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
+                                                                    <thead>
+                                                                        <tr class="text-muted">
+                                                                            <th>Автор</th>
+                                                                            <th>Текст</th>
+                                                                            <th>❤</th>
+                                                                            <th>Дата</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        @foreach (var c in _expandedComments)
+                                                                        {
+                                                                            <tr>
+                                                                                <td style="white-space:nowrap">
+                                                                                    <a href="@($"https://www.tiktok.com/@{c.AuthorUniqueId}")" target="_blank"
+                                                                                       rel="noopener noreferrer" class="text-decoration-none text-muted">
+                                                                                        @@@c.AuthorUniqueId
+                                                                                    </a>
+                                                                                </td>
+                                                                                <td>@(c.Text.Length > 150 ? c.Text[..150] + "…" : c.Text)</td>
+                                                                                <td>
+                                                                                    @if (c.LikeCount > 0)
+                                                                                    { <span class="text-danger">@c.LikeCount</span> }
+                                                                                    else { <span class="text-muted">—</span> }
+                                                                                </td>
+                                                                                <td class="text-muted" style="white-space:nowrap">@c.CommentCreatedAt.ToString("dd.MM.yy HH:mm")</td>
+                                                                            </tr>
+                                                                        }
+                                                                    </tbody>
+                                                                </table>
+                                                            }
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    List<TrackedChannel> _channels = [];
+    bool   _loading          = true;
+    bool   _checking         = false;
+    string _newUniqueId      = "";
+    string _newDisplayName   = "";
+    string _errorMessage     = "";
+    Guid?  _expandedChannelId;
+
+    (Guid ChannelId, string VideoId)? _expandedVideoKey;
+    List<VideoComment> _expandedComments = [];
+    bool _commentsLoading = false;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _loading  = true;
+        _channels = await Db.TrackedChannels
+            .OrderBy(c => c.CreatedAt)
+            .Include(c => c.Videos)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    void ToggleChannel(Guid id)
+    {
+        if (_expandedChannelId == id)
+        {
+            _expandedChannelId = null;
+            _expandedVideoKey  = null;
+            _expandedComments  = [];
+        }
+        else
+        {
+            _expandedChannelId = id;
+            _expandedVideoKey  = null;
+            _expandedComments  = [];
+        }
+    }
+
+    async Task ToggleComments(Guid channelId, string videoId)
+    {
+        var key = (channelId, videoId);
+        if (_expandedVideoKey == key)
+        {
+            _expandedVideoKey = null;
+            _expandedComments = [];
+            return;
+        }
+
+        _expandedVideoKey  = key;
+        _commentsLoading   = true;
+        _expandedComments  = [];
+        StateHasChanged();
+
+        _expandedComments = await Db.VideoComments
+            .Where(c => c.VideoId == videoId)
+            .OrderByDescending(c => c.CommentCreatedAt)
+            .Take(30)
+            .ToListAsync();
+
+        _commentsLoading = false;
+    }
+
+    async Task AddChannelAsync()
+    {
+        _errorMessage = "";
+        var uid = _newUniqueId.Trim().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(uid))
+        {
+            _errorMessage = "Введите @username канала.";
+            return;
+        }
+
+        var existing = await ChannelRepo.GetByUniqueIdAsync(uid);
+        if (existing is not null)
+        {
+            _errorMessage = $"Канал @{uid} уже добавлен.";
+            return;
+        }
+
+        await ChannelRepo.AddAsync(new TrackedChannel
+        {
+            UniqueId    = uid,
+            DisplayName = string.IsNullOrWhiteSpace(_newDisplayName) ? null : _newDisplayName.Trim(),
+            IsActive    = true
+        });
+
+        _newUniqueId    = "";
+        _newDisplayName = "";
+        await LoadAsync();
+    }
+
+    async Task ToggleActiveAsync(TrackedChannel ch)
+    {
+        ch.IsActive = !ch.IsActive;
+        await Db.SaveChangesAsync();
+    }
+
+    async Task DeleteAsync(TrackedChannel ch)
+    {
+        Db.TrackedChannels.Remove(ch);
+        await Db.SaveChangesAsync();
+        await LoadAsync();
+    }
+
+    async Task RunCheckAsync()
+    {
+        _checking = true;
+        StateHasChanged();
+        try
+        {
+            await MonitorPipeline.RunAsync();
+            await LoadAsync();
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+}
