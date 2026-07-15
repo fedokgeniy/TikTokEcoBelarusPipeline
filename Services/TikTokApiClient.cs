@@ -120,17 +120,13 @@ public class TikTokApiClient
     // ---------------------------------------------------------------
     // GET /api/user/followings
     //
-    // tiktok-api23 pagination schema:
-    //   First page:  ?secUid=...&count=30   (no cursor)
-    //   Next pages:  ?secUid=...&count=30&maxCursor=<value from previous response>
+    // tiktok-api23 may respond with HTTP 202 + {"message":"...processing"}
+    // when the backend hasn't cached the result yet.
+    // We retry up to MaxRetries times with increasing delay before giving up.
     //
-    // Response fields that signal "more pages":
-    //   hasMore  (bool or int 1/0)
-    //   maxCursor / cursor / minCursor   (long, use for next request)
-    //   minTime  (legacy, may also appear)
-    //
-    // Strategy: try all known cursor fields; stop when hasMore is falsy
-    // or no cursor is found and the last page returned 0 new items.
+    // Pagination: first page has no cursor; subsequent pages use
+    //   &maxCursor=<value> from the previous response.
+    // Stop when hasMore is falsy or no cursor is returned.
     // ---------------------------------------------------------------
     public async Task<List<TikTokFollowingUser>> GetUserFollowingsAsync(
         string secUid,
@@ -138,9 +134,11 @@ public class TikTokApiClient
         CancellationToken ct = default)
     {
         var result   = new List<TikTokFollowingUser>();
-        long? cursor = null;   // null = first page (no cursor param)
+        long? cursor = null;
         int pageSize = Math.Min(50, maxCount);
         int page     = 0;
+        const int MaxRetries   = 4;
+        const int RetryDelayMs = 5000; // 5 sec between retries on 202
 
         Console.WriteLine($"[FOLLOWINGS] secUid={secUid[..Math.Min(20, secUid.Length)]}... maxCount={maxCount}");
 
@@ -158,10 +156,33 @@ public class TikTokApiClient
             var url = urlBuilder.ToString();
             Console.WriteLine($"[FOLLOWINGS] Page {page + 1}, already={result.Count}, cursor={cursor?.ToString() ?? "(first)"}");
 
-            var body = await SafeGetStringAsync(url, ct);
+            // --- Retry loop for HTTP 202 ---
+            string? body = null;
+            for (int attempt = 1; attempt <= MaxRetries; attempt++)
+            {
+                body = await SafeGetStringAsync(url, ct, allow202: true);
+                if (body is null) break; // hard error
+
+                // Check if it's the "still processing" response
+                if (body.Contains("still processing", StringComparison.OrdinalIgnoreCase)
+                 || body.Contains("Request accepted",  StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[FOLLOWINGS] 202 still processing (attempt {attempt}/{MaxRetries}), waiting {RetryDelayMs}ms...");
+                    if (attempt < MaxRetries)
+                        await Task.Delay(RetryDelayMs * attempt, ct); // exponential: 5s, 10s, 15s
+                    else
+                    {
+                        Console.WriteLine("[FOLLOWINGS] Max retries reached on 202, giving up.");
+                        body = null;
+                    }
+                    continue;
+                }
+
+                break; // got a real response
+            }
+
             if (body is null) break;
 
-            // Log raw pagination fields for debugging
             Console.WriteLine($"[FOLLOWINGS RAW] {body[..Math.Min(300, body.Length)]}");
 
             try
@@ -169,11 +190,10 @@ public class TikTokApiClient
                 var doc  = JsonDocument.Parse(body);
                 var root = doc.RootElement;
 
-                // --- Parse followings array ---
                 if (!root.TryGetProperty("followings", out var followingsArr)
                  || followingsArr.ValueKind != JsonValueKind.Array)
                 {
-                    Console.WriteLine("[FOLLOWINGS] No 'followings' array in response — stopping.");
+                    Console.WriteLine("[FOLLOWINGS] No 'followings' array — stopping.");
                     break;
                 }
 
@@ -203,18 +223,18 @@ public class TikTokApiClient
                 Console.WriteLine($"[FOLLOWINGS] Page {page + 1}: added={added}, total={result.Count}");
                 page++;
 
-                if (added == 0) break; // empty page — no more data
+                if (added == 0) break;
 
-                // --- Determine hasMore ---
+                // hasMore
                 bool hasMore = false;
                 if (root.TryGetProperty("hasMore", out var hmEl))
                 {
-                    if (hmEl.ValueKind == JsonValueKind.True)  hasMore = true;
-                    if (hmEl.ValueKind == JsonValueKind.False) hasMore = false;
+                    if (hmEl.ValueKind == JsonValueKind.True)   hasMore = true;
+                    if (hmEl.ValueKind == JsonValueKind.False)  hasMore = false;
                     if (hmEl.ValueKind == JsonValueKind.Number) hasMore = hmEl.GetInt32() != 0;
                 }
 
-                // --- Read next cursor (try all known field names) ---
+                // next cursor
                 long? nextCursor = null;
                 foreach (var field in new[] { "maxCursor", "cursor", "minCursor", "minTime" })
                 {
@@ -229,8 +249,7 @@ public class TikTokApiClient
 
                 Console.WriteLine($"[FOLLOWINGS] hasMore={hasMore}, nextCursor={nextCursor}");
 
-                if (!hasMore || nextCursor is null)
-                    break; // API says no more pages
+                if (!hasMore || nextCursor is null) break;
 
                 cursor = nextCursor;
                 await Task.Delay(900, ct);
@@ -268,7 +287,7 @@ public class TikTokApiClient
                       $"?keyword={Uri.EscapeDataString(keyword)}" +
                       $"&offset={offset}";
 
-            Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} offset={offset} GET {url}");
+            Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} offset={offset}");
 
             var body = await SafeGetStringAsync(url, ct);
             if (body is null) break;
@@ -301,7 +320,7 @@ public class TikTokApiClient
 
             if (newItems.Count == 0)
             {
-                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\": all items duplicate — stopping.");
+                Console.WriteLine($"[SEARCH END] All items duplicate — stopping.");
                 break;
             }
 
@@ -343,7 +362,7 @@ public class TikTokApiClient
         if (!root.TryGetProperty("comments", out var commentsArr)
          || commentsArr.ValueKind != JsonValueKind.Array)
         {
-            Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId} raw={body[..Math.Min(200, body.Length)]}");
+            Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId}");
             yield break;
         }
 
@@ -374,7 +393,13 @@ public class TikTokApiClient
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
-    private async Task<string?> SafeGetStringAsync(string url, CancellationToken ct)
+
+    /// <param name="allow202">When true, 202 responses are returned as body text
+    /// instead of being treated as errors, so callers can handle retry logic.</param>
+    private async Task<string?> SafeGetStringAsync(
+        string url,
+        CancellationToken ct,
+        bool allow202 = false)
     {
         HttpResponseMessage resp;
         try { resp = await _http.GetAsync(url, ct); }
@@ -386,6 +411,14 @@ public class TikTokApiClient
         }
 
         var body = await resp.Content.ReadAsStringAsync(ct);
+
+        // 202 Accepted = "still processing" — let caller decide
+        if ((int)resp.StatusCode == 202 && allow202)
+        {
+            Console.WriteLine($"[HTTP 202] {url}");
+            return body;
+        }
+
         if (!resp.IsSuccessStatusCode)
         {
             Console.Error.WriteLine(
