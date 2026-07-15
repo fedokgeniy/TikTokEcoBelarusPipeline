@@ -10,11 +10,11 @@ public class CollectionPipeline(
     ISearchQueryRepository searchQueryRepo)
 {
     /// <summary>
-    /// maxVideos — целевое кол-во видео, ПРОШедШИХ порог, на один запрос.
-    /// Pipeline запрашивает страницы до тех пор, пока не наберётся maxVideos прошедших
-    /// или API не вернёт has_more=false.
-    /// ~10 видео на страницу у tiktok-api23, поэтому maxPages = ceil(maxVideos / 10).
-    /// Hard limit — не более 100 страниц в любом случае.
+    /// maxVideos — целевое кол-во видео, ПРОШеДШИХ порог BY+ECO, на один keyword.
+    /// Пайплайн запрашивает страницы до тех пор, пока:
+    ///   • наберётся ровно maxVideos прошедших, ИЛИ
+    ///   • API вернёт 100% дублей (больше данных нет), ИЛИ
+    ///   • достигнут абсолютный потолок в maxPagesHardLimit страниц.
     /// </summary>
     public async Task<List<(ScoredVideo Scored, Guid QueryId)>> RunAsync(
         double minBelarus = 0.15,
@@ -22,15 +22,9 @@ public class CollectionPipeline(
         int maxVideos = 50,
         CancellationToken ct = default)
     {
-        const int videosPerPage     = 10;
+        // Абсолютный потолок страниц — защита от бесконечного цикла если API не закончится.
+        // Реальная остановка — по passed >= maxVideos через cts.Cancel().
         const int maxPagesHardLimit = 100;
-
-        // Вычисляем реальный лимит страниц из maxVideos.
-        // x3 — запас, чтобы учесть видео, которые не пройдут порог.
-        // Например: maxVideos=50 → 15 страниц вместо 100.
-        int maxPages = Math.Min(
-            (int)Math.Ceiling((double)maxVideos / videosPerPage) * 3,
-            maxPagesHardLimit);
 
         var queries = await searchQueryRepo.GetActiveQueriesAsync();
         var seen    = new HashSet<string>();
@@ -40,7 +34,6 @@ public class CollectionPipeline(
         {
             Console.WriteLine($"[SEARCH] Querying: \"{query.Value}\" (type: {query.QueryType})");
             Console.WriteLine($"[SEARCH] Цель: набрать {maxVideos} видео, прошедших порог BY≥{minBelarus:F2} ECO≥{minEco:F2}");
-            Console.WriteLine($"[SEARCH] maxPages={maxPages} (~{videosPerPage} видео/стр., запас x3)");
 
             if (query.DateFrom.HasValue)
                 Console.WriteLine($"[FILTER] Видео не старше: {query.DateFrom.Value:yyyy-MM-dd}");
@@ -60,7 +53,7 @@ public class CollectionPipeline(
             try
             {
                 await foreach (var item in api.SearchVideosAsync(
-                    query.Value, maxPages, ct: linkedToken))
+                    query.Value, maxPagesHardLimit, ct: linkedToken))
                 {
                     fetched++;
 
@@ -98,10 +91,12 @@ public class CollectionPipeline(
                             $"BY={scoredVideo.BelarusScore:F2} ECO={scoredVideo.EcoScore:F2} " +
                             $"| @{item.Author.UniqueId}: {item.Desc[..Math.Min(60, item.Desc.Length)]}...");
 
+                    // Цель достигнута — останавливаем асинхронный итератор через отмену токена
                     if (passed >= maxVideos)
                     {
                         Console.WriteLine(
-                            $"[DONE] Цель достигнута: {passed}/{maxVideos} видео для \"{query.Value}\". Остановка.");
+                            $"[DONE] Цель достигнута: {passed}/{maxVideos} видео для \"{query.Value}\" " +
+                            $"(fetched={fetched}, scored={scored}). Остановка.");
                         cts.Cancel();
                         break;
                     }
