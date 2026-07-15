@@ -21,8 +21,11 @@ public interface ITrackedChannelRepository
     /// <summary>Возвращает HashSet уже сохранённых VideoId для данного канала.</summary>
     Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId);
 
-    /// <summary>Сохраняет комментарии, игнорируя дубликаты по CommentId.</summary>
-    Task SaveCommentsAsync(IEnumerable<VideoComment> comments);
+    /// <summary>
+    /// Сохраняет комментарии, игнорируя дубликаты по CommentId.
+    /// Возвращает HashSet CommentId, которые были реально вставлены (новые).
+    /// </summary>
+    Task<HashSet<string>> SaveCommentsAsync(IEnumerable<VideoComment> comments);
 
     /// <summary>
     /// Возвращает список видео канала, возраст которых не превышает maxAgeDays дней.

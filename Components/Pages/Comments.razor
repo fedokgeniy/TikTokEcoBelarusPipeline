@@ -132,15 +132,16 @@ else
         DateTimeOffset CommentCreatedAt
     );
 
-    List<TrackedChannel> _channels  = [];
-    List<CommentRow>     _comments  = [];
-    bool   _loading          = true;
-    string _selectedChannelId = "";
-    string _searchText       = "";
-    string _sortBy           = "date";
-    int    _page             = 0;
-    int    _pageSize         = 50;
-    int    _totalCount       = 0;
+    List<TrackedChannel> _channels        = [];
+    List<CommentRow>     _comments        = [];
+    bool   _loading                       = true;
+    string _selectedChannelId             = "";
+    string _searchText                    = "";
+    string _sortBy                        = "date";
+    int    _page                          = 0;
+    int    _pageSize                      = 50;
+    int    _totalCount                    = 0;
+    bool   _resetPage                     = true;
 
     protected override async Task OnInitializedAsync()
     {
@@ -148,10 +149,16 @@ else
         await LoadAsync();
     }
 
+    /// <summary>
+    /// Единая точка загрузки данных.
+    /// При смене фильтра (_resetPage=true по умолчанию) сбрасывает страницу на 0.
+    /// При смене страницы вызывается через PrevPage/NextPage с _resetPage=false.
+    /// </summary>
     async Task LoadAsync()
     {
         _loading = true;
-        _page    = 0;
+        if (_resetPage) _page = 0;
+        _resetPage = true;
         StateHasChanged();
 
         var query = Db.VideoComments
@@ -159,17 +166,14 @@ else
                 .ThenInclude(v => v.Channel)
             .AsQueryable();
 
-        // Фильтр по каналу
         if (Guid.TryParse(_selectedChannelId, out var chId))
             query = query.Where(c => c.Video.TrackedChannelId == chId);
 
-        // Поиск по тексту
         if (!string.IsNullOrWhiteSpace(_searchText))
             query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
 
         _totalCount = await query.CountAsync();
 
-        // Сортировка
         query = _sortBy == "likes"
             ? query.OrderByDescending(c => c.LikeCount)
             : query.OrderByDescending(c => c.CommentCreatedAt);
@@ -199,53 +203,22 @@ else
 
     async Task PrevPage()
     {
-        if (_page > 0) { _page--; await FetchPageAsync(); }
+        if (_page > 0)
+        {
+            _page--;
+            _resetPage = false;
+            await LoadAsync();
+        }
     }
 
     async Task NextPage()
     {
-        if ((_page + 1) * _pageSize < _totalCount) { _page++; await FetchPageAsync(); }
-    }
-
-    async Task FetchPageAsync()
-    {
-        _loading = true;
-        StateHasChanged();
-
-        var query = Db.VideoComments
-            .Include(c => c.Video).ThenInclude(v => v.Channel)
-            .AsQueryable();
-
-        if (Guid.TryParse(_selectedChannelId, out var chId))
-            query = query.Where(c => c.Video.TrackedChannelId == chId);
-        if (!string.IsNullOrWhiteSpace(_searchText))
-            query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
-
-        query = _sortBy == "likes"
-            ? query.OrderByDescending(c => c.LikeCount)
-            : query.OrderByDescending(c => c.CommentCreatedAt);
-
-        var raw = await query
-            .Skip(_page * _pageSize)
-            .Take(_pageSize)
-            .Select(c => new {
-                c.VideoId,
-                VideoDescription = c.Video.Description,
-                ChannelUniqueId  = c.Video.Channel.UniqueId,
-                c.CommentId,
-                c.Text,
-                c.AuthorUniqueId,
-                c.LikeCount,
-                c.CommentCreatedAt
-            })
-            .ToListAsync();
-
-        _comments = raw.Select(r => new CommentRow(
-            r.VideoId, r.VideoDescription, r.ChannelUniqueId,
-            r.CommentId, r.Text, r.AuthorUniqueId, r.LikeCount, r.CommentCreatedAt
-        )).ToList();
-
-        _loading = false;
+        if ((_page + 1) * _pageSize < _totalCount)
+        {
+            _page++;
+            _resetPage = false;
+            await LoadAsync();
+        }
     }
 
     void ResetFilters()

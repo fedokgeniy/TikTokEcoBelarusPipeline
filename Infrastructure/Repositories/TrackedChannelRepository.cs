@@ -96,10 +96,14 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
             .ToHashSetAsync();
     }
 
-    public async Task SaveCommentsAsync(IEnumerable<VideoComment> comments)
+    /// <summary>
+    /// Сохраняет комментарии, игнорируя дубликаты по CommentId.
+    /// Возвращает HashSet CommentId, которые были реально вставлены (новые).
+    /// </summary>
+    public async Task<HashSet<string>> SaveCommentsAsync(IEnumerable<VideoComment> comments)
     {
         var list = comments.ToList();
-        if (list.Count == 0) return;
+        if (list.Count == 0) return [];
 
         await using var db = await dbFactory.CreateDbContextAsync();
         var incomingIds  = list.Select(c => c.CommentId).ToList();
@@ -109,10 +113,12 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
             .ToHashSetAsync();
 
         var toInsert = list.Where(c => !existingKeys.Contains(c.CommentId)).ToList();
-        if (toInsert.Count == 0) return;
+        if (toInsert.Count == 0) return [];
 
         db.VideoComments.AddRange(toInsert);
         await db.SaveChangesAsync();
+
+        return toInsert.Select(c => c.CommentId).ToHashSet();
     }
 
     /// <summary>
@@ -136,7 +142,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
     public async Task SaveSnapshotAsync(VideoCommentSnapshot snapshot)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
-        // Округляем до минуты чтобы не плодить дубликаты при повторных запусках в ту же минуту
         var minute = new DateTimeOffset(
             snapshot.SnapshotAt.Year, snapshot.SnapshotAt.Month, snapshot.SnapshotAt.Day,
             snapshot.SnapshotAt.Hour, snapshot.SnapshotAt.Minute, 0, TimeSpan.Zero);

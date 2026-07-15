@@ -192,19 +192,23 @@ public class ChannelMonitorPipeline(
 
             if (collected.Count == 0) continue;
 
-            // --- Сохраняем (без классификации, IsRelevant=null) ---
-            await channelRepo.SaveCommentsAsync(collected);
+            // --- Сохраняем: возвращаем только реально вставленные (новые) CommentId ---
+            var insertedIds = await channelRepo.SaveCommentsAsync(collected);
 
-            // --- Классификация через Claude Haiku ---
-            // Классифицируем только те, что ещё не классифицированы (новые)
+            if (insertedIds.Count == 0)
+            {
+                Console.WriteLine(
+                    $"[COMMENTS] videoId={video.VideoId}: all comments already in DB, skipping classification.");
+                continue;
+            }
+
+            // --- Классифицируем только реально новые комментарии ---
             var toClassify = collected
-                .Where(c => c.IsRelevant is null)
+                .Where(c => insertedIds.Contains(c.CommentId))
                 .ToList();
 
-            if (toClassify.Count == 0) continue;
-
             Console.WriteLine(
-                $"[CLASSIFIER] videoId={video.VideoId}: classifying {toClassify.Count} comment(s)...");
+                $"[CLASSIFIER] videoId={video.VideoId}: classifying {toClassify.Count} new comment(s)...");
 
             Dictionary<string, (bool IsRelevant, string? Tags)> classified;
             try
@@ -234,7 +238,6 @@ public class ChannelMonitorPipeline(
             Console.WriteLine(
                 $"[CLASSIFIER] videoId={video.VideoId}: {relevantCount}/{classified.Count} relevant.");
 
-            // Небольшая пауза между видео чтобы не перегружать API
             await Task.Delay(1000, ct);
         }
     }
