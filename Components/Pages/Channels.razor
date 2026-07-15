@@ -98,7 +98,7 @@
                 <button class="btn btn-sm btn-success" @onclick="AddAllFollowingsAsync" disabled="@_importing">
                     ✅ Добавить все новые (@_importPreview.Count(u => !_existingUniqueIds.Contains(u.UniqueId)))
                 </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="ClearImportPreview">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => { _importPreview.Clear(); _importMessage = string.Empty; }">
                     ✕ Сбросить
                 </button>
             </div>
