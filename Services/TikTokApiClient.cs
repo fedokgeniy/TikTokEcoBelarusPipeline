@@ -11,8 +11,8 @@ public class TikTokApiClient
     private const string BaseUrl = "https://tiktok-api23.p.rapidapi.com";
 
     // Retry config for transient API responses (202, 204)
-    private const int TransientMaxRetries   = 4;
-    private const int TransientRetryBaseMs  = 5000;
+    private const int TransientMaxRetries  = 4;
+    private const int TransientRetryBaseMs = 5000;
 
     public TikTokApiClient(HttpClient http, string apiKey)
     {
@@ -24,7 +24,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/info?uniqueId=username
-    // Retries automatically on 202/204 (API still warming up cache).
     // ---------------------------------------------------------------
     public async Task<TikTokUserInfo?> GetUserInfoAsync(
         string uniqueId,
@@ -124,6 +123,14 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/followings
+    //
+    // tiktok-api23 KNOWN BUG: hasMore is always false even when more
+    // followings exist. Real end-of-data signal = empty followings array
+    // OR no cursor returned. We ignore hasMore entirely and paginate
+    // until the array is empty or no valid cursor is found.
+    //
+    // Pagination cursor field names tried in order:
+    //   maxCursor, cursor, minCursor, minTime
     // ---------------------------------------------------------------
     public async Task<List<TikTokFollowingUser>> GetUserFollowingsAsync(
         string secUid,
@@ -132,8 +139,9 @@ public class TikTokApiClient
     {
         var result   = new List<TikTokFollowingUser>();
         long? cursor = null;
-        int pageSize = Math.Min(50, maxCount);
+        int pageSize = 30; // API ignores count > 30, always returns 30
         int page     = 0;
+        var seenIds  = new HashSet<string>(); // guard against infinite loops
 
         Console.WriteLine($"[FOLLOWINGS] secUid={secUid[..Math.Min(20, secUid.Length)]}... maxCount={maxCount}");
 
@@ -154,7 +162,8 @@ public class TikTokApiClient
             var body = await SafeGetWithRetryAsync(url, ct, tag: $"FOLLOWINGS page={page + 1}");
             if (body is null) break;
 
-            Console.WriteLine($"[FOLLOWINGS RAW] {body[..Math.Min(300, body.Length)]}");
+            // Log enough of the raw response to see all pagination fields
+            Console.WriteLine($"[FOLLOWINGS RAW] {body[..Math.Min(500, body.Length)]}");
 
             try
             {
@@ -181,6 +190,7 @@ public class TikTokApiClient
                     string? secUidUser = u.TryGetProperty("secUid",   out var sEl)  ? sEl.GetString()  : null;
 
                     if (string.IsNullOrWhiteSpace(uniqueId)) continue;
+                    if (!seenIds.Add(uniqueId)) continue; // duplicate — API looped
 
                     result.Add(new TikTokFollowingUser
                     {
@@ -191,19 +201,21 @@ public class TikTokApiClient
                     added++;
                 }
 
-                Console.WriteLine($"[FOLLOWINGS] Page {page + 1}: added={added}, total={result.Count}");
                 page++;
+                Console.WriteLine($"[FOLLOWINGS] Page {page}: added={added}, total={result.Count}");
 
-                if (added == 0) break;
-
-                bool hasMore = false;
-                if (root.TryGetProperty("hasMore", out var hmEl))
+                // TRUE stop condition: empty page = no more data
+                if (added == 0)
                 {
-                    if (hmEl.ValueKind == JsonValueKind.True)   hasMore = true;
-                    if (hmEl.ValueKind == JsonValueKind.False)  hasMore = false;
-                    if (hmEl.ValueKind == JsonValueKind.Number) hasMore = hmEl.GetInt32() != 0;
+                    Console.WriteLine("[FOLLOWINGS] Empty page — all followings collected.");
+                    break;
                 }
 
+                // Log hasMore for diagnostics only — DO NOT use it to stop
+                if (root.TryGetProperty("hasMore", out var hmEl))
+                    Console.WriteLine($"[FOLLOWINGS] hasMore={hmEl} (ignored — known API bug)");
+
+                // Find next cursor (try all known field names)
                 long? nextCursor = null;
                 foreach (var field in new[] { "maxCursor", "cursor", "minCursor", "minTime" })
                 {
@@ -216,9 +228,22 @@ public class TikTokApiClient
                     }
                 }
 
-                Console.WriteLine($"[FOLLOWINGS] hasMore={hasMore}, nextCursor={nextCursor}");
+                Console.WriteLine($"[FOLLOWINGS] nextCursor={nextCursor}");
 
-                if (!hasMore || nextCursor is null) break;
+                // No cursor returned and we got a full page — try without cursor
+                // (some API versions omit cursor on first page only)
+                if (nextCursor is null)
+                {
+                    Console.WriteLine("[FOLLOWINGS] No cursor in response — stopping.");
+                    break;
+                }
+
+                // Protect against cursor not advancing (infinite loop)
+                if (nextCursor == cursor)
+                {
+                    Console.WriteLine("[FOLLOWINGS] Cursor unchanged — stopping to avoid loop.");
+                    break;
+                }
 
                 cursor = nextCursor;
                 await Task.Delay(900, ct);
@@ -363,11 +388,6 @@ public class TikTokApiClient
     // Helpers
     // ---------------------------------------------------------------
 
-    /// <summary>
-    /// Wraps SafeGetStringAsync with automatic retry for transient API
-    /// responses: HTTP 202 (still processing) and HTTP 204 (empty body).
-    /// Delay grows linearly: base * attempt (5s, 10s, 15s, 20s).
-    /// </summary>
     private async Task<string?> SafeGetWithRetryAsync(
         string url,
         CancellationToken ct,
@@ -377,18 +397,15 @@ public class TikTokApiClient
         {
             var (body, statusCode) = await SafeGetStringInternalAsync(url, ct);
 
-            // Hard error (4xx/5xx) — no point retrying
             if (statusCode >= 400)
             {
-                Console.Error.WriteLine($"[{tag}] HTTP {statusCode} — hard error, giving up.");
+                Console.Error.WriteLine($"[{tag}] HTTP {statusCode} — hard error.");
                 return null;
             }
 
-            // Real response
             if (statusCode == 200 && !string.IsNullOrWhiteSpace(body))
                 return body;
 
-            // Transient: 202 or 204 or empty body on 200
             string reason = statusCode == 202 ? "202 still processing"
                           : statusCode == 204 ? "204 no content"
                           : "200 empty body";
@@ -408,10 +425,6 @@ public class TikTokApiClient
         return null;
     }
 
-    /// <summary>
-    /// Raw HTTP GET. Returns (body, statusCode). Body may be empty.
-    /// Never throws on non-success status codes — returns them to caller.
-    /// </summary>
     private async Task<(string? body, int statusCode)> SafeGetStringInternalAsync(
         string url,
         CancellationToken ct)
@@ -429,7 +442,6 @@ public class TikTokApiClient
         return (body, (int)resp.StatusCode);
     }
 
-    /// <summary>Simple wrapper for endpoints that don't need transient retry.</summary>
     private async Task<string?> SafeGetStringAsync(string url, CancellationToken ct)
     {
         var (body, statusCode) = await SafeGetStringInternalAsync(url, ct);
