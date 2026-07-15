@@ -319,18 +319,25 @@ public class TikTokApiClient
     //
     // Эндпоинт /api/comment/list удалён провайдером (HTTP 404).
     // Новый рабочий эндпоинт: /api/post/comments.
-    // Пагинация: cursor из поля "cursor" в ответе; stop когда hasMore=false
-    // или cursor не меняется.
+    //
+    // Пагинация: НЕ полагаемся на hasMore (API врёт раньше времени).
+    // Останавливаемся только если:
+    //   - cursor не меняется 2 раза подряд (sameCursorStreak >= 2)
+    //   - страница пустая 2 раза подряд (emptyPageStreak >= 2)
+    //   - nextCursor <= 0
+    //   - достигнут лимит страниц (maxPages)
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokComment> GetVideoCommentsAsync(
         string videoId,
         int pageSize = 50,
-        int maxPages = 20,
+        int maxPages = 200,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        long cursor  = 0;
-        int  page    = 0;
-        var  seenIds = new HashSet<string>();
+        long cursor = 0;
+        int page = 0;
+        var seenIds = new HashSet<string>();
+        int sameCursorStreak = 0;
+        int emptyPageStreak = 0;
 
         while (page < maxPages)
         {
@@ -359,18 +366,22 @@ public class TikTokApiClient
             if (!root.TryGetProperty("comments", out var commentsArr)
              || commentsArr.ValueKind != JsonValueKind.Array)
             {
-                Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId} page={page + 1}");
-                break;
+                Console.WriteLine($"[COMMENTS EMPTY ARRAY] videoId={videoId} page={page + 1}");
+                emptyPageStreak++;
+                if (emptyPageStreak >= 2) break;
+                page++;
+                await Task.Delay(800, ct);
+                continue;
             }
 
             int yielded = 0;
             foreach (var c in commentsArr.EnumerateArray())
             {
-                string? commentId  = c.TryGetProperty("cid",               out var cidEl)   ? cidEl.GetString()   : null;
-                string? text       = c.TryGetProperty("text",              out var textEl)  ? textEl.GetString()  : null;
-                long    likeCount  = c.TryGetProperty("digg_count",        out var lkEl)    ? lkEl.GetInt64()    : 0;
-                long    replyTotal = c.TryGetProperty("reply_comment_total",out var rtEl)   ? rtEl.GetInt64()   : 0;
-                long    createTime = c.TryGetProperty("create_time",       out var ctEl)    ? ctEl.GetInt64()    : 0;
+                string? commentId  = c.TryGetProperty("cid",                out var cidEl)  ? cidEl.GetString()  : null;
+                string? text       = c.TryGetProperty("text",               out var textEl) ? textEl.GetString() : null;
+                long    likeCount  = c.TryGetProperty("digg_count",         out var lkEl)   ? lkEl.GetInt64()   : 0;
+                long    replyTotal = c.TryGetProperty("reply_comment_total", out var rtEl)   ? rtEl.GetInt64()   : 0;
+                long    createTime = c.TryGetProperty("create_time",        out var ctEl)   ? ctEl.GetInt64()   : 0;
 
                 string? authorId = null;
                 string? authorUniqueId = null;
@@ -397,21 +408,36 @@ public class TikTokApiClient
 
             Console.WriteLine($"[COMMENTS] videoId={videoId} page={page + 1}: yielded={yielded}");
 
-            // Проверяем hasMore и следующий cursor
-            bool hasMore = root.TryGetProperty("hasMore", out var hmEl) && hmEl.GetBoolean();
-
             long nextCursor = 0;
             if (root.TryGetProperty("cursor", out var cEl2))
             {
-                if (cEl2.ValueKind == JsonValueKind.Number)       nextCursor = cEl2.GetInt64();
-                else if (cEl2.ValueKind == JsonValueKind.String)  long.TryParse(cEl2.GetString(), out nextCursor);
+                if (cEl2.ValueKind == JsonValueKind.Number)      nextCursor = cEl2.GetInt64();
+                else if (cEl2.ValueKind == JsonValueKind.String) long.TryParse(cEl2.GetString(), out nextCursor);
             }
+
+            if (yielded == 0) emptyPageStreak++;
+            else emptyPageStreak = 0;
+
+            if (nextCursor == cursor) sameCursorStreak++;
+            else sameCursorStreak = 0;
 
             page++;
 
-            if (!hasMore || nextCursor == 0 || nextCursor == cursor)
+            if (emptyPageStreak >= 2)
             {
-                Console.WriteLine($"[COMMENTS DONE] videoId={videoId} total_pages={page}");
+                Console.WriteLine($"[COMMENTS DONE] videoId={videoId}: stopping after repeated empty pages.");
+                break;
+            }
+
+            if (sameCursorStreak >= 2)
+            {
+                Console.WriteLine($"[COMMENTS DONE] videoId={videoId}: cursor repeated too many times.");
+                break;
+            }
+
+            if (nextCursor <= 0)
+            {
+                Console.WriteLine($"[COMMENTS DONE] videoId={videoId}: nextCursor={nextCursor}");
                 break;
             }
 

@@ -146,7 +146,11 @@ public class ChannelMonitorPipeline(
 
             var collected = new List<VideoComment>();
 
-            await foreach (var c in api.GetVideoCommentsAsync(video.VideoId, pageSize: 50, ct: ct))
+            await foreach (var c in api.GetVideoCommentsAsync(
+                video.VideoId,
+                pageSize: 50,
+                maxPages: 200,
+                ct: ct))
             {
                 collected.Add(new VideoComment
                 {
