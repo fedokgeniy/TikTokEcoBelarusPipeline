@@ -5,11 +5,7 @@ namespace TikTokEcoBelarus.Infrastructure.Repositories;
 
 /// <summary>
 /// Репозиторий для TrackedChannel и связанных сущностей.
-///
-/// Использует IDbContextFactory вместо прямого инжекта AppDbContext,
-/// чтобы избежать "Cannot access a disposed context instance" —
-/// ChannelMonitorPipeline живёт дольше Scoped-контекста Blazor.
-/// Каждый метод создаёт и уничтожает собственный контекст через using.
+/// Каждый метод создаёт и уничтожает собственный DbContext через using.
 /// </summary>
 public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory) : ITrackedChannelRepository
 {
@@ -96,10 +92,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
             .ToHashSetAsync();
     }
 
-    /// <summary>
-    /// Сохраняет комментарии, игнорируя дубликаты по CommentId.
-    /// Возвращает HashSet CommentId, которые были реально вставлены (новые).
-    /// </summary>
     public async Task<HashSet<string>> SaveCommentsAsync(IEnumerable<VideoComment> comments)
     {
         var list = comments.ToList();
@@ -121,10 +113,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
         return toInsert.Select(c => c.CommentId).ToHashSet();
     }
 
-    /// <summary>
-    /// Возвращает видео канала, возраст которых ≤ maxAgeDays дней от текущего момента.
-    /// Фильтрует по VideoCreatedAt — дате публикации видео в TikTok.
-    /// </summary>
     public async Task<List<TrackedChannelVideo>> GetVideosForCommentFetchAsync(
         Guid channelId, int maxAgeDays)
     {
@@ -135,10 +123,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Сохраняет снапшот числа комментариев. Дублируем уникальный индекс (VideoId+SnapshotAt)
-    /// и просто пропускаем, если такой момент времени уже записан.
-    /// </summary>
     public async Task SaveSnapshotAsync(VideoCommentSnapshot snapshot)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -157,16 +141,19 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
     }
 
     /// <summary>
-    /// Обновляет IsRelevant и Tags у комментария после классификации Haiku.
+    /// Обновляет все поля AI-классификации после ответа от Claude.
     /// </summary>
     public async Task UpdateCommentClassificationAsync(
-        string commentId, bool isRelevant, string? tags)
+        string commentId, bool isRelevant, int score, string? category, bool shouldReply, string? tags)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.VideoComments
             .Where(c => c.CommentId == commentId)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(c => c.IsRelevant, isRelevant)
-                .SetProperty(c => c.Tags,       tags));
+                .SetProperty(c => c.IsRelevant,  isRelevant)
+                .SetProperty(c => c.Score,       score)
+                .SetProperty(c => c.Category,    category)
+                .SetProperty(c => c.ShouldReply, shouldReply)
+                .SetProperty(c => c.Tags,        tags));
     }
 }

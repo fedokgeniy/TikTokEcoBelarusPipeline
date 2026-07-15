@@ -29,17 +29,15 @@ public interface ITrackedChannelRepository
 
     /// <summary>
     /// Возвращает список видео канала, возраст которых не превышает maxAgeDays дней.
-    /// Используется для отбора видео, под которыми нужно собирать комментарии.
     /// </summary>
     Task<List<TrackedChannelVideo>> GetVideosForCommentFetchAsync(Guid channelId, int maxAgeDays);
 
-    /// <summary>
-    /// Сохраняет снапшот числа комментариев под видео (для истории динамики роста).
-    /// </summary>
+    /// <summary>Сохраняет снапшот числа комментариев под видео (для истории динамики роста).</summary>
     Task SaveSnapshotAsync(VideoCommentSnapshot snapshot);
 
     /// <summary>
-    /// Обновляет поля IsRelevant и Tags у конкретного комментария после классификации.
+    /// Обновляет поля классификации комментария: IsRelevant, Score, Category, ShouldReply, Tags.
     /// </summary>
-    Task UpdateCommentClassificationAsync(string commentId, bool isRelevant, string? tags);
+    Task UpdateCommentClassificationAsync(
+        string commentId, bool isRelevant, int score, string? category, bool shouldReply, string? tags);
 }
