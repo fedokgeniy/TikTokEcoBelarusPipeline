@@ -9,12 +9,20 @@ public class CollectionPipeline(
     BelarusEcoScorer scorer,
     ISearchQueryRepository searchQueryRepo)
 {
+    /// <summary>
+    /// maxVideos — максимальное кол-во видео на один запрос (из UI/AppSettings).
+    /// Количество страниц вычисляется как ceil(maxVideos / 10), затем результат обрезается.
+    /// </summary>
     public async Task<List<(ScoredVideo Scored, Guid QueryId)>> RunAsync(
-        double minBelarus = 0.15,   // FIX: снижено с 0.3 — запросы типа "экология" дают BY=0.0–0.10
-        double minEco = 0.20,       // FIX: снижено с 0.3 — даём больше шансов нишевым запросам
-        int maxPagesPerQuery = 10,
+        double minBelarus = 0.15,
+        double minEco = 0.20,
+        int maxVideos = 50,
         CancellationToken ct = default)
     {
+        // ~10 видео на страницу у tiktok-api23
+        const int videosPerPage = 10;
+        int maxPages = (int)Math.Ceiling((double)maxVideos / videosPerPage);
+
         var queries = await searchQueryRepo.GetActiveQueriesAsync();
         var seen    = new HashSet<string>();
         var results = new List<(ScoredVideo Scored, Guid QueryId)>();
@@ -22,6 +30,7 @@ public class CollectionPipeline(
         foreach (var query in queries.OrderBy(q => q.Priority))
         {
             Console.WriteLine($"[SEARCH] Querying: \"{query.Value}\" (type: {query.QueryType})");
+            Console.WriteLine($"[SEARCH] maxVideos={maxVideos} → maxPages={maxPages} (~{videosPerPage} видео/стр.)");
 
             if (query.DateFrom.HasValue)
                 Console.WriteLine($"[FILTER] Видео не старше: {query.DateFrom.Value:yyyy-MM-dd}");
@@ -32,9 +41,10 @@ public class CollectionPipeline(
             int scored      = 0;
             int passed      = 0;
 
-            var scoreLog = new List<string>();
+            var scoreLog    = new List<string>();
+            var queryVideos = new List<(ScoredVideo Scored, Guid QueryId)>();
 
-            await foreach (var item in api.SearchVideosAsync(query.Value, maxPagesPerQuery, ct: ct))
+            await foreach (var item in api.SearchVideosAsync(query.Value, maxPages, ct: ct))
             {
                 fetched++;
 
@@ -64,7 +74,7 @@ public class CollectionPipeline(
                     continue;
 
                 passed++;
-                results.Add((scoredVideo, query.Id));
+                queryVideos.Add((scoredVideo, query.Id));
 
                 if (seen.Add(item.Id))
                     Console.WriteLine(
@@ -72,6 +82,16 @@ public class CollectionPipeline(
                         $"ECO={scoredVideo.EcoScore:F2} | @{item.Author.UniqueId}: " +
                         $"{item.Desc[..Math.Min(60, item.Desc.Length)]}...");
             }
+
+            // Обрезаем до maxVideos
+            if (queryVideos.Count > maxVideos)
+            {
+                Console.WriteLine($"[TRIM] Обрезаем {queryVideos.Count} → {maxVideos} видео для запроса \"{query.Value}\"");
+                queryVideos = queryVideos.Take(maxVideos).ToList();
+                passed = queryVideos.Count;
+            }
+
+            results.AddRange(queryVideos);
 
             Console.WriteLine(
                 $"[STATS] \"{query.Value}\": " +

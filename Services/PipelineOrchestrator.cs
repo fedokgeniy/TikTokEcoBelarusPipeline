@@ -38,10 +38,18 @@ public class PipelineOrchestrator(IServiceScopeFactory scopeFactory)
             var csvExport = scope.ServiceProvider.GetRequiredService<CsvExportService>();
             var db        = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+            // Читаем maxPerQuery из AppSettings на каждый запуск
+            int maxVideos = 50; // значение по умолчанию
+            var maxRow = await db.AppSettings.FindAsync("maxPerQuery");
+            if (maxRow != null && int.TryParse(maxRow.Value, out var parsed) && parsed > 0)
+                maxVideos = parsed;
+
+            Console.WriteLine($"[PIPELINE] maxVideos={maxVideos} (из AppSettings)");
+
             var queryCount = await db.SearchQueries.CountAsync(q => q.IsActive, ct);
             progress?.Report(new PipelineProgress(0, queryCount, "Запуск..."));
 
-            var results = await pipeline.RunAsync(minBelarus, minEco, ct: ct);
+            var results = await pipeline.RunAsync(minBelarus, minEco, maxVideos: maxVideos, ct: ct);
 
             progress?.Report(new PipelineProgress(queryCount, queryCount, "Сохранение..."));
 
@@ -109,10 +117,8 @@ public class PipelineOrchestrator(IServiceScopeFactory scopeFactory)
                 {
                     var key = (videoId, queryId);
 
-                    // Пропускаем если линк уже добавлен в этом ране
                     if (!addedLinks.Add(key)) continue;
 
-                    // Пропускаем если линк уже есть в БД
                     var linkExists = await db.Set<VideoSearchQueryLink>()
                         .AnyAsync(l => l.VideoId == videoId && l.SearchQueryId == queryId, ct);
 
