@@ -122,6 +122,13 @@ else
         Encoder       = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    // Helper: parse string → UTC DateTime, returns null if empty/invalid
+    static DateTime? ParseDateUtc(string? value)
+    {
+        if (!DateTime.TryParse(value, out var d)) return null;
+        return DateTime.SpecifyKind(d, DateTimeKind.Utc);
+    }
+
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     async Task LoadAsync()
@@ -153,7 +160,8 @@ else
 
     async Task UpdateDateFrom(SearchQuery q, string? value)
     {
-        q.DateFrom = DateTime.TryParse(value, out var d) ? d : null;
+        // Fix: always store UTC to avoid Kind=Unspecified PostgreSQL error
+        q.DateFrom = ParseDateUtc(value);
         await Db.SaveChangesAsync();
     }
 
@@ -161,11 +169,16 @@ else
     {
         if (string.IsNullOrWhiteSpace(_newValue)) return;
 
+        // Fix: normalise _newDateFrom to UTC before inserting into DB
+        var dateFromUtc = _newDateFrom.HasValue
+            ? DateTime.SpecifyKind(_newDateFrom.Value, DateTimeKind.Utc)
+            : (DateTime?)null;
+
         Db.SearchQueries.Add(new SearchQuery
         {
             QueryType = _newType,
             Value     = _newValue.Trim(),
-            DateFrom  = _newDateFrom,
+            DateFrom  = dateFromUtc,
             Priority  = _queries.Count + 1,
             IsActive  = true
         });
@@ -222,7 +235,8 @@ else
                 {
                     QueryType = dto.QueryType,
                     Value     = dto.Value,
-                    DateFrom  = DateTime.TryParse(dto.DateFrom, out var d) ? d : null,
+                    // Fix: parse JSON dates as UTC to avoid Kind=Unspecified PostgreSQL error
+                    DateFrom  = ParseDateUtc(dto.DateFrom),
                     Priority  = dto.Priority > 0 ? dto.Priority : priority,
                     IsActive  = dto.IsActive
                 });
