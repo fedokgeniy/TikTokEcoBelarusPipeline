@@ -116,20 +116,25 @@ public class TikTokApiClient
     // ---------------------------------------------------------------
     // GET /api/search/video?keyword=...
     //
-    // ПАГИНАЦИЯ: tiktok-api23 использует offset (0, 12, 24, ...),
-    // а НЕ cursor из тела ответа.
+    // ВАЖНО: tiktok-api23 ВСЕГДА возвращает has_more=0 — это баг API.
+    // Реальный признак конца: пустой ItemList или повторяющиеся items.
+    // Пагинация по offset: 0, +count_items, +count_items, ...
+    // Останавливаемся только если пришёл пустой массив или HTTP-ошибка.
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
-        int maxPages = 10,
-        int delayMs = 1500,
+        int maxPages = 100,
+        int delayMs  = 1500,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        int offset   = 0;
-        int page     = 0;
+        int offset = 0;
+        int page   = 0;
+        var seenIds = new HashSet<string>();
 
         while (page < maxPages)
         {
+            ct.ThrowIfCancellationRequested();
+
             var url = $"{BaseUrl}/api/search/video" +
                       $"?keyword={Uri.EscapeDataString(keyword)}" +
                       $"&offset={offset}";
@@ -153,31 +158,38 @@ public class TikTokApiClient
 
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
-                Console.WriteLine($"[SEARCH EMPTY] keyword=\"{keyword}\" offset={offset}");
-                Console.WriteLine($"[SEARCH EMPTY RAW] {body[..Math.Min(300, body.Length)]}");
+                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\" offset={offset}: пустая страница — контент закончился.");
                 break;
             }
 
+            // Проверяем дубли: если все id уже видели — API зациклился
+            var newItems = response.ItemList
+                .Where(item => seenIds.Add(item.Id))
+                .ToList();
+
             Console.WriteLine(
-                $"[SEARCH OK] Page {page + 1}: {response.ItemList.Count} items, " +
-                $"cursor={response.Cursor}, has_more={response.HasMore}");
+                $"[SEARCH OK] Page {page + 1}: {response.ItemList.Count} items " +
+                $"({newItems.Count} новых), cursor={response.Cursor}, has_more={response.HasMore} [игнорируется]");
 
-            foreach (var item in response.ItemList)
+            if (newItems.Count == 0)
+            {
+                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\": все items повторяются — API вернул дубли, стоп.");
+                break;
+            }
+
+            foreach (var item in newItems)
                 yield return item;
-
-            if (!response.HasMoreItems) break;
 
             offset += response.ItemList.Count;
             page++;
-            await Task.Delay(delayMs, ct);
+
+            if (page < maxPages)
+                await Task.Delay(delayMs, ct);
         }
     }
 
     // ---------------------------------------------------------------
     // GET /api/comment/list?videoId=...&count=N
-    //
-    // Возвращает последние N комментариев под видео.
-    // Вызывается только для новых видео (delta-логика в pipeline).
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokComment> GetVideoCommentsAsync(
         string videoId,
@@ -238,6 +250,7 @@ public class TikTokApiClient
     {
         HttpResponseMessage resp;
         try { resp = await _http.GetAsync(url, ct); }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[HTTP ERROR] {url}: {ex.Message}");
