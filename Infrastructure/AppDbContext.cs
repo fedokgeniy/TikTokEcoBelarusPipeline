@@ -31,7 +31,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             b.HasKey(s => s.Key);
             b.Property(s => s.Key).HasMaxLength(100);
-            b.Property(s => s.Value).HasMaxLength(500);
+            b.Property(s => s.Value).HasColumnType("text");
         });
     }
 }
