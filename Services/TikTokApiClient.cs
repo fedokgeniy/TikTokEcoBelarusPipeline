@@ -246,17 +246,23 @@ public class TikTokApiClient
     }
 
     // ---------------------------------------------------------------
-    // GET /api/search/video?keyword=...
+    // GET /api/search/video?keyword=..&offset=N
     //
     // Известные особенности RapidAPI TikTok endpoint:
-    //   - cursor может зависать на одном значении (напр. 12) на многих страницах
-    //   - has_more=0 не отражает реальное наличие новых элементов
-    //   - offset-based пагинация: offset += фактическое кол-во элементов страницы
+    //   - cursor зависает (например, cursor=12) на многих страницах — игнорируется
+    //   - has_more=0 не отражает реальное наличие новых элементов — игнорируется
+    //   - TikTok возвращает тот же пул видео при малых шагах offset (< 20–30)
+    //
+    // Стратегия offset:
+    //   - Базовый шаг: max(rawCount, MinOffsetStep) — не меньше 30 даже если API вернул 10
+    //   - При дублирующей странице: дополнительный jitter +DupJitterStep*streak
+    //     чтобы "выпрыгнуть" из зависшего окна результатов
+    //   - При пустой странице: шаг MinOffsetStep как fallback
     //
     // Стратегия остановки (streak-based, tolerant к плохому API):
-    //   - emptyPageStreak >= 2   : подряд страниц с пустым itemList
+    //   - emptyPageStreak >= 2    : подряд пустых страниц
     //   - duplicatePageStreak >= 3: подряд страниц без новых videoId
-    //   - maxPages               : защитный лимит
+    //   - maxPages                : защитный лимит
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
@@ -264,17 +270,22 @@ public class TikTokApiClient
         int delayMs  = 1500,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        const int PageSize            = 10; // fallback если API вернул 0 элементов
-        const int EmptyPageLimit      = 2;  // остановка после N подряд пустых страниц
-        const int DuplicatePageLimit  = 3;  // остановка после N подряд страниц без новых ID
-        const int LowYieldPageLimit   = 5;  // предупреждение при N подряд страницах с < 2 новых
+        // Минимальный шаг offset — даже если API вернул 10 видео,
+        // шагаем минимум на 30, чтобы не застрять в одном кэш-окне TikTok.
+        const int MinOffsetStep      = 30;
+        // Дополнительный прыжок при каждом дублирующем streak:
+        // streak=1 → +20, streak=2 → +40, streak=3 → +60 (и остановка)
+        const int DupJitterStep      = 20;
+        const int EmptyPageLimit     = 2;
+        const int DuplicatePageLimit = 3;
+        const int LowYieldPageLimit  = 5;
 
-        int offset             = 0;
-        int page               = 0;
-        int emptyPageStreak    = 0;
+        int offset              = 0;
+        int page                = 0;
+        int emptyPageStreak     = 0;
         int duplicatePageStreak = 0;
-        int lowYieldStreak     = 0;
-        var seenIds            = new HashSet<string>();
+        int lowYieldStreak      = 0;
+        var seenIds             = new HashSet<string>();
 
         while (page < maxPages)
         {
@@ -310,9 +321,13 @@ public class TikTokApiClient
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
                 emptyPageStreak++;
+                // Шагаем на MinOffsetStep чтобы попробовать сдвинуть окно
+                offset += MinOffsetStep;
+                page++;
+
                 Console.WriteLine(
-                    $"[SEARCH EMPTY] Page {page + 1}: itemList null/empty " +
-                    $"(emptyPageStreak={emptyPageStreak}/{EmptyPageLimit})");
+                    $"[SEARCH EMPTY] Page {page}: itemList null/empty " +
+                    $"(emptyPageStreak={emptyPageStreak}/{EmptyPageLimit}) offsetNext={offset}");
 
                 if (emptyPageStreak >= EmptyPageLimit)
                 {
@@ -322,9 +337,6 @@ public class TikTokApiClient
                     break;
                 }
 
-                // advance offset by fallback pageSize to try shifting the window
-                offset += PageSize;
-                page++;
                 await Task.Delay(delayMs, ct);
                 continue;
             }
@@ -344,21 +356,28 @@ public class TikTokApiClient
                 .Where(item => !string.IsNullOrEmpty(item.Id) && seenIds.Add(item.Id))
                 .ToList();
 
-            int newCount    = newItems.Count;
-            int offsetNext  = offset + rawCount;
+            int newCount = newItems.Count;
 
-            Console.WriteLine(
-                $"[SEARCH OK] Page {page + 1}: raw={rawCount} new={newCount} " +
-                $"offsetNext={offsetNext} " +
-                $"cursor={response.Cursor} has_more={response.HasMore} [both ignored]");
+            // Базовый шаг: не меньше MinOffsetStep даже если rawCount=10
+            int baseStep = Math.Max(rawCount, MinOffsetStep);
 
-            // --- Дублирующая страница ---
+            // --- Дублирующая страница: добавляем jitter чтобы выбраться из окна ---
             if (newCount == 0)
             {
                 duplicatePageStreak++;
+                int jitter     = DupJitterStep * duplicatePageStreak;
+                int offsetNext = offset + baseStep + jitter;
+
+                Console.WriteLine(
+                    $"[SEARCH OK] Page {page + 1}: raw={rawCount} new=0 " +
+                    $"baseStep={baseStep} jitter=+{jitter} offsetNext={offsetNext} " +
+                    $"cursor={response.Cursor} has_more={response.HasMore} [both ignored]");
                 Console.WriteLine(
                     $"[SEARCH DUP] Page {page + 1}: all {rawCount} items already seen " +
                     $"(duplicatePageStreak={duplicatePageStreak}/{DuplicatePageLimit})");
+
+                offset = offsetNext;
+                page++;
 
                 if (duplicatePageStreak >= DuplicatePageLimit)
                 {
@@ -370,10 +389,15 @@ public class TikTokApiClient
             }
             else
             {
-                // Новые элементы найдены — сбрасываем streak дублей
+                // Новые элементы найдены — сбрасываем streak дублей, шагаем базово
                 duplicatePageStreak = 0;
+                int offsetNext      = offset + baseStep;
 
-                // Проверка низкого выхода (опционально — только лог, не остановка)
+                Console.WriteLine(
+                    $"[SEARCH OK] Page {page + 1}: raw={rawCount} new={newCount} " +
+                    $"baseStep={baseStep} offsetNext={offsetNext} " +
+                    $"cursor={response.Cursor} has_more={response.HasMore} [both ignored]");
+
                 if (newCount < 2)
                 {
                     lowYieldStreak++;
@@ -389,10 +413,10 @@ public class TikTokApiClient
 
                 foreach (var item in newItems)
                     yield return item;
-            }
 
-            offset = offsetNext;
-            page++;
+                offset = offsetNext;
+                page++;
+            }
 
             if (page < maxPages)
                 await Task.Delay(delayMs, ct);
@@ -454,11 +478,11 @@ public class TikTokApiClient
             int yielded = 0;
             foreach (var c in commentsArr.EnumerateArray())
             {
-                string? commentId  = c.TryGetProperty("cid",               out var cidEl)   ? cidEl.GetString()   : null;
-                string? text       = c.TryGetProperty("text",              out var textEl)  ? textEl.GetString()  : null;
-                long    likeCount  = c.TryGetProperty("digg_count",        out var lkEl)    ? lkEl.GetInt64()    : 0;
-                long    replyTotal = c.TryGetProperty("reply_comment_total",out var rtEl)   ? rtEl.GetInt64()   : 0;
-                long    createTime = c.TryGetProperty("create_time",       out var ctEl)    ? ctEl.GetInt64()    : 0;
+                string? commentId  = c.TryGetProperty("cid",                out var cidEl)  ? cidEl.GetString()  : null;
+                string? text       = c.TryGetProperty("text",               out var textEl) ? textEl.GetString() : null;
+                long    likeCount  = c.TryGetProperty("digg_count",         out var lkEl)   ? lkEl.GetInt64()   : 0;
+                long    replyTotal = c.TryGetProperty("reply_comment_total", out var rtEl)  ? rtEl.GetInt64()  : 0;
+                long    createTime = c.TryGetProperty("create_time",        out var ctEl)   ? ctEl.GetInt64()   : 0;
 
                 string? authorId = null;
                 string? authorUniqueId = null;
