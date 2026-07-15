@@ -1,239 +1,62 @@
 @page "/settings"
 @rendermode InteractiveServer
-@using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
 @using TikTokEcoBelarus.Services
 @using Microsoft.EntityFrameworkCore
-@inject AppDbContext Db
+@inject IDbContextFactory<AppDbContext> DbFactory
 
 <h4 class="mb-4">🤖 Настройки нейросети (Anthropic Claude)</h4>
 
-<div class="card p-4 mb-4" style="max-width:800px">
-
-    <!-- API Key -->
-    <div class="mb-4">
-        <label class="form-label fw-semibold">🔑 Anthropic API Key</label>
-        <div class="input-group">
-            <input type="@(_showKey ? "text" : "password")"
-                   class="form-control font-monospace"
-                   placeholder="sk-ant-..."
-                   @bind="_draftApiKey" />
-            <button class="btn btn-outline-secondary" @onclick="() => _showKey = !_showKey">
-                @(_showKey ? "🙈 Скрыть" : "👁 Показать")
-            </button>
-        </div>
-        <div class="form-text text-muted">
-            Ключ хранится в БД (таблица AppSettings). Не попадает в Git.
-        </div>
+@if (_loading)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <div class="mb-3" style="max-width:480px">
+        <label class="form-label">API Key</label>
+        <input class="form-control" @bind="_apiKey" />
     </div>
-
-    <!-- Model -->
-    <div class="mb-4">
-        <label class="form-label fw-semibold">🧠 Модель</label>
-        <select class="form-select" @bind="_draftModel">
-            <option value="claude-haiku-4-5">claude-haiku-4-5 (быстрый, дешёвый)</option>
-            <option value="claude-haiku-3-5">claude-haiku-3-5</option>
-            <option value="claude-sonnet-4-5">claude-sonnet-4-5 (лучше, дороже)</option>
-            <option value="claude-sonnet-3-7">claude-sonnet-3-7</option>
-            <option value="claude-opus-4-5">claude-opus-4-5 (самый мощный)</option>
-        </select>
-        <div class="form-text text-muted">
-            Текущая: <code>@_currentModel</code>
-        </div>
+    <div class="mb-3" style="max-width:480px">
+        <label class="form-label">Модель</label>
+        <input class="form-control" @bind="_model" />
     </div>
-
-    <!-- Max video age -->
-    <div class="mb-4">
-        <label class="form-label fw-semibold">📅 Макс. возраст видео для сбора комментариев (дней)</label>
-        <input type="number" class="form-control" style="max-width:160px"
-               min="1" max="365" step="1"
-               @bind="_draftMaxVideoAgeDays" />
-        <div class="form-text text-muted">
-            Комментарии собираются только под видео не старше указанного числа дней.
-            Текущее значение в БД: <code>@_currentMaxVideoAgeDays</code> д.
-        </div>
+    <div class="mb-3">
+        <label class="form-label">Системный промт (классификация комментариев)</label>
+        <textarea class="form-control" rows="8" @bind="_prompt"></textarea>
     </div>
-
-    <!-- System Prompt -->
-    <div class="mb-4">
-        <label class="form-label fw-semibold">📝 Системный промт классификатора</label>
-        <textarea class="form-control font-monospace"
-                  rows="14"
-                  @bind="_draftPrompt"
-                  placeholder="Введите системный промт..."></textarea>
-        <div class="form-text text-muted">
-            Отправляется в Anthropic как <code>system</code>-сообщение.
-            Поддерживаемые поля ответа: <code>cid</code>, <code>score</code> (0–100), <code>category</code>, <code>shouldReply</code>, <code>tags</code>.
-        </div>
-    </div>
-
-    <!-- Кнопки -->
-    <div class="d-flex gap-3 align-items-center flex-wrap">
-        <button class="btn btn-success" @onclick="SaveAsync" disabled="@_saving">
-            @(_saving ? "⏳ Сохранение..." : "💾 Сохранить")
-        </button>
-        <button class="btn btn-outline-secondary" @onclick="ResetDraftAsync" disabled="@_saving">
-            ↩ Сбросить к текущим
-        </button>
-        <button class="btn btn-outline-info btn-sm" @onclick="SetDefaultPrompt">
-            🔄 Загрузить стандартный
-        </button>
-        @if (_savedMsg != null)
-        {
-            <span class="@(_savedError ? "text-danger" : "text-success") small">@_savedMsg</span>
-        }
-    </div>
-
-</div>
-
-<!-- JSON-схема ответа -->
-<div class="card p-3 mb-3" style="max-width:800px; border-color:#dee2e6">
-    <h6 class="mb-2 text-muted">📄 Ожидаемая JSON-схема ответа</h6>
-    <pre class="small bg-light p-2 rounded mb-0" style="overflow-x:auto">[
-  {
-    "cid": "&lt;comment_id&gt;",
-    "score": 85,            // 0–100: релевантность для «Зелёного телефона»
-    "category": "свалки/отходы",  // см. список ниже
-    "shouldReply": true,    // есть вопрос/проблема — нужен ответ
-    "tags": ["waste", "illegal-dumping"]
-  }
-]</pre>
-    <div class="mt-2 small text-muted">
-        Категории: <code>свалки/отходы</code> | <code>вырубка/зелёные насаждения</code> | <code>вода</code> |
-        <code>воздух</code> | <code>животные</code> | <code>борщевик/растения</code> |
-        <code>права и жалобы</code> | <code>вопрос-консультация</code> |
-        <code>эмоция по экотеме</code> | <code>не по теме</code>
-    </div>
-</div>
-
-<!-- Подсказки -->
-<div class="card p-3" style="max-width:800px; border-color:#dee2e6">
-    <h6 class="mb-2 text-muted">ℹ️ Как это работает</h6>
-    <ul class="small text-muted mb-0">
-        <li>Ключ и промт читаются из БД при каждом запуске пайплайна.</li>
-        <li>Если ключ пустой — классификатор пропускает батч и логирует предупреждение.</li>
-        <li>Модель влияет на скорость и стоимость: Haiku ≈ $0.25/1M токенов, Sonnet ≈ $3/1M.</li>
-        <li>Поле <code>score ≥ 70</code> — приоритет для ответа; <code>shouldReply = true</code> — есть запрос или проблема.</li>
-        <li>«Макс. возраст видео» — комментарии собираются только под видео не старше N дней (дефолт 5).</li>
-    </ul>
-</div>
+    <button class="btn btn-primary" @onclick="SaveAsync">Сохранить</button>
+    @if (!string.IsNullOrEmpty(_saved)) { <span class="ms-3 text-success">@_saved</span> }
+}
 
 @code {
-    const string KeyApiKey         = "anthropic:apiKey";
-    const string KeyModel          = "anthropic:model";
-    const string KeyPrompt         = "anthropic:systemPrompt";
-    const string KeyMaxVideoAgeDays = "pipeline:maxVideoAgeDays";
-
-    const string DefaultModel          = "claude-haiku-4-5";
-    const int    DefaultMaxVideoAgeDays = 5;
-
-    const string DefaultPrompt =
-        "Ты — классификатор комментариев для экологической горячей линии «Зелёный телефон» (Беларусь).\n" +
-        "Наши интересы: свалки, загрязнение воды/воздуха, незаконные вырубки, животные, борщевик,\n" +
-        "экоправа граждан, жалобы на бездействие органов, вопросы «куда обратиться», локальные экопроблемы Беларуси.\n" +
-        "НЕ наши интересы: политика без экосоставляющей, реклама, флуд, оскорбления, лайфстайл, оффтоп.\n\n" +
-        "Для КАЖДОГО комментария верни JSON-объект со следующими полями:\n" +
-        "  cid        — id комментария (строка, передаётся без изменений)\n" +
-        "  score      — целое число 0–100 (коэффициент релевантности):\n" +
-        "    90–100: прямой запрос помощи или конкретное нарушение с местом\n" +
-        "    70–89: экопроблема или вопрос без конкретики места\n" +
-        "    40–69: эмоция/мнение по экотеме, нет запроса\n" +
-        "    10–39: слабая связь — природа/животные без экосодержания\n" +
-        "    0–9: оффтоп, флуд, реклама, непонятный текст\n" +
-        "  category   — одна из строк: свалки/отходы | вырубка/зелёные насаждения |\n" +
-        "              вода | воздух | животные | борщевик/растения |\n" +
-        "              права и жалобы | вопрос-консультация | эмоция по экотеме | не по теме\n" +
-        "  shouldReply — true если есть вопрос, запрос помощи или конкретная проблема; false иначе\n" +
-        "  tags        — массив тегов на английском, строчными (пустой при score < 10)\n\n" +
-        "ПРАВИЛА:\n" +
-        "- Верни ТОЛЬКО JSON-массив без пояснений, без markdown, без преамбулы.\n" +
-        "- Оценивай только по тексту, не додумывай контекст.\n" +
-        "- Сарказм и мемы про экологию — score 40–69, не выше.\n" +
-        "- Комментарий на беларусском — оценивай так же, как на русском.\n" +
-        "- Непонятный или обрезанный текст — score 0, tags [], shouldReply false.\n" +
-        "- Не пропускай ни одного комментария из переданного списка.";
-
-    string _draftApiKey          = "";
-    string _draftModel           = DefaultModel;
-    string _draftPrompt          = DefaultPrompt;
-    int    _draftMaxVideoAgeDays = DefaultMaxVideoAgeDays;
-    string _currentModel         = DefaultModel;
-    int    _currentMaxVideoAgeDays = DefaultMaxVideoAgeDays;
-
-    bool    _showKey    = false;
-    bool    _saving     = false;
-    bool    _savedError = false;
-    string? _savedMsg   = null;
+    bool _loading = true;
+    string _apiKey = "", _model = "", _prompt = "";
+    string _saved = "";
 
     protected override async Task OnInitializedAsync()
-        => await LoadAsync();
-
-    async Task LoadAsync()
     {
-        var keys = new[] { KeyApiKey, KeyModel, KeyPrompt, KeyMaxVideoAgeDays };
-        var rows = await Db.AppSettings
-            .Where(s => keys.Contains(s.Key))
-            .ToDictionaryAsync(s => s.Key, s => s.Value);
-
-        _draftApiKey = rows.TryGetValue(KeyApiKey, out var k) ? k : "";
-        _draftModel  = rows.TryGetValue(KeyModel,  out var m) ? m : DefaultModel;
-        _draftPrompt = rows.TryGetValue(KeyPrompt, out var p) ? p : DefaultPrompt;
-
-        if (rows.TryGetValue(KeyMaxVideoAgeDays, out var ageDays) &&
-            int.TryParse(ageDays, out var parsed) && parsed > 0)
-        {
-            _draftMaxVideoAgeDays   = parsed;
-            _currentMaxVideoAgeDays = parsed;
-        }
-        else
-        {
-            _draftMaxVideoAgeDays   = DefaultMaxVideoAgeDays;
-            _currentMaxVideoAgeDays = DefaultMaxVideoAgeDays;
-        }
-
-        _currentModel = _draftModel;
+        await using var db = DbFactory.CreateDbContext();
+        _apiKey = (await db.AppSettings.FindAsync("claudeApiKey"))?.Value ?? "";
+        _model  = (await db.AppSettings.FindAsync("claudeModel"))?.Value  ?? "claude-haiku-4-5";
+        _prompt = (await db.AppSettings.FindAsync("classifierPrompt"))?.Value ?? "";
+        _loading = false;
     }
-
-    void SetDefaultPrompt() => _draftPrompt = DefaultPrompt;
 
     async Task SaveAsync()
     {
-        _saving   = true;
-        _savedMsg = null;
-        StateHasChanged();
-        try
-        {
-            await UpsertAsync(KeyApiKey, _draftApiKey.Trim());
-            await UpsertAsync(KeyModel,  _draftModel.Trim());
-            await UpsertAsync(KeyPrompt, _draftPrompt.Trim());
-            await UpsertAsync(KeyMaxVideoAgeDays,
-                Math.Max(1, _draftMaxVideoAgeDays).ToString());
-            _currentModel           = _draftModel;
-            _currentMaxVideoAgeDays = Math.Max(1, _draftMaxVideoAgeDays);
-            _savedError = false;
-            _savedMsg   = "✓ Настройки сохранены";
-        }
-        catch (Exception ex)
-        {
-            _savedError = true;
-            _savedMsg   = $"Ошибка: {ex.Message}";
-        }
-        finally { _saving = false; }
-
-        StateHasChanged();
-        await Task.Delay(3000);
-        _savedMsg = null;
+        await using var db = DbFactory.CreateDbContext();
+        await SetAsync(db, "claudeApiKey",     _apiKey);
+        await SetAsync(db, "claudeModel",       _model);
+        await SetAsync(db, "classifierPrompt", _prompt);
+        await db.SaveChangesAsync();
+        _saved = "✅ Сохранено";
     }
 
-    async Task ResetDraftAsync() => await LoadAsync();
-
-    async Task UpsertAsync(string key, string value)
+    static async Task SetAsync(AppDbContext db, string key, string value)
     {
-        var row = await Db.AppSettings.FindAsync(key);
-        if (row == null)
-            Db.AppSettings.Add(new AppSetting { Key = key, Value = value });
-        else
-            row.Value = value;
-        await Db.SaveChangesAsync();
+        var row = await db.AppSettings.FindAsync(key);
+        if (row is null) db.AppSettings.Add(new TikTokEcoBelarus.Domain.Entities.AppSetting { Key = key, Value = value });
+        else row.Value = value;
     }
 }

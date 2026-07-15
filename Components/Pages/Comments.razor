@@ -3,392 +3,57 @@
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
 @using Microsoft.EntityFrameworkCore
-@inject AppDbContext Db
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
 
 <h4 class="mb-3">&#x1F4AC; Комментарии к видео</h4>
 
-<!-- Фильтры -->
-<div class="card mb-3 p-3">
-    <div class="row g-2 align-items-end">
-        <div class="col-md-3">
-            <label class="form-label form-label-sm mb-1">Канал</label>
-            <select class="form-select form-select-sm" @bind="_selectedChannelId" @bind:after="LoadAsync">
-                <option value="">— Все каналы —</option>
-                @foreach (var ch in _channels)
-                {
-                    <option value="@ch.Id">@@@ch.UniqueId @(ch.DisplayName is not null ? $"({ch.DisplayName})" : "")</option>
-                }
-            </select>
-        </div>
-        <div class="col-md-2">
-            <label class="form-label form-label-sm mb-1">Классификация</label>
-            <select class="form-select form-select-sm" @bind="_filterRelevant" @bind:after="LoadAsync">
-                <option value="">— Все —</option>
-                <option value="relevant">✅ Релевантные</option>
-                <option value="irrelevant">❌ Нерелевантные</option>
-                <option value="unclassified">❓ Не классифицированы</option>
-                <option value="reply">ὊC Нужен ответ</option>
-            </select>
-        </div>
-        <div class="col-md-2">
-            <label class="form-label form-label-sm mb-1">Поиск по тексту</label>
-            <input class="form-control form-control-sm" placeholder="Ключевое слово..."
-                   @bind="_searchText" @bind:after="LoadAsync" />
-        </div>
-        <div class="col-md-2">
-            <label class="form-label form-label-sm mb-1">Сортировка</label>
-            <select class="form-select form-select-sm" @bind="_sortBy" @bind:after="LoadAsync">
-                <option value="date">По дате ↓</option>
-                <option value="likes">По лайкам ↓</option>
-                <option value="score">По счёту AI ↓</option>
-            </select>
-        </div>
-        <div class="col-md-1">
-            <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ResetFilters">Сброс</button>
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-outline-danger w-100" @onclick="DeleteAllAsync"
-                    disabled="@_deleting">
-                @if (_deleting) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                Ὕ1 Удалить все
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- Счётчик -->
-@if (!_loading)
-{
-    <div class="d-flex align-items-center gap-3 mb-2">
-        <span class="text-muted small">Найдено: <strong>@_totalCount</strong> комментариев</span>
-        @if (_relevantCount > 0)
-        {
-            <span class="badge bg-success">✅ Релевантных: @_relevantCount</span>
-        }
-        @if (_replyCount > 0)
-        {
-            <span class="badge bg-primary">ὊC Нужен ответ: @_replyCount</span>
-        }
-    </div>
-}
-
-@if (_deleteMsg is not null)
-{
-    <div class="alert alert-warning alert-dismissible py-2 mb-2">
-        @_deleteMsg
-        <button type="button" class="btn-close" @onclick="() => _deleteMsg = null"></button>
-    </div>
-}
-
-<!-- Таблица -->
 @if (_loading)
 {
     <p>Загрузка...</p>
 }
-else if (_comments.Count == 0)
-{
-    <div class="text-center text-muted py-5">
-        <div style="font-size:2rem;">&#x1F4AC;</div>
-        <p class="mt-2">Комментарии не найдены.<br/>Запустите проверку каналов на странице <a href="/channels">📡 Каналы</a>.</p>
-    </div>
-}
 else
 {
-    <div class="table-responsive">
-    <table class="table table-sm table-hover align-middle">
-        <thead class="table-dark">
-            <tr>
-                <th style="width:110px">Канал</th>
-                <th style="width:140px">Видео</th>
-                <th>Текст комментария</th>
-                <th style="width:110px">Автор</th>
-                <th style="width:60px" title="Лайки">❤</th>
-                <th style="width:70px" title="AI счёт">AI</th>
-                <th style="width:90px">Категория</th>
-                <th style="width:80px">Теги</th>
-                <th style="width:60px">Ответ</th>
-                <th style="width:100px">Дата</th>
-            </tr>
-        </thead>
+    <div class="mb-3 d-flex gap-2">
+        <input class="form-control" style="max-width:280px" placeholder="Фильтр по videoId" @bind="_filterVideoId" />
+        <button class="btn btn-outline-secondary" @onclick="LoadAsync">🔍 Фильтр</button>
+    </div>
+    <p class="text-muted small">Всего: @_total комментариев (показано @_comments.Count)</p>
+    <table class="table table-sm table-hover">
+        <thead><tr><th>VideoId</th><th>Автор</th><th>Текст</th><th>Лайки</th><th>Релевантно</th><th>Дата</th></tr></thead>
         <tbody>
-            @foreach (var c in _comments)
-            {
-                <tr class="@RowClass(c)">
-                    <td>
-                        <a href="https://www.tiktok.com/@@@c.ChannelUniqueId" target="_blank"
-                           rel="noopener noreferrer" class="text-decoration-none small">
-                            @@@c.ChannelUniqueId
-                        </a>
-                    </td>
-                    <td>
-                        <a href="https://www.tiktok.com/@@@c.ChannelUniqueId/video/@c.VideoId"
-                           target="_blank" rel="noopener noreferrer"
-                           class="text-decoration-none text-truncate d-inline-block small"
-                           style="max-width:130px" title="@c.VideoDescription">
-                            @(c.VideoDescription?.Length > 25
-                                ? c.VideoDescription[..25] + "…"
-                                : c.VideoDescription ?? c.VideoId)
-                        </a>
-                    </td>
-                    <td style="max-width:340px">
-                        <span title="@c.Text" class="small">
-                            @(c.Text.Length > 110 ? c.Text[..110] + "…" : c.Text)
-                        </span>
-                    </td>
-                    <td>
-                        <a href="https://www.tiktok.com/@@@c.AuthorUniqueId" target="_blank"
-                           rel="noopener noreferrer" class="text-muted text-decoration-none small">
-                            @@@c.AuthorUniqueId
-                        </a>
-                    </td>
-                    <td class="text-center">
-                        @if (c.LikeCount > 0)
-                        {
-                            <span class="badge bg-danger">@c.LikeCount.ToString("N0")</span>
-                        }
-                        else { <span class="text-muted">—</span> }
-                    </td>
-                    <!-- AI Score -->
-                    <td class="text-center">
-                        @if (c.Score is int score)
-                        {
-                            <span class="badge @ScoreBadge(score)" title="AI релевантность">@score</span>
-                        }
-                        else if (c.IsRelevant is null)
-                        {
-                            <span class="text-muted small" title="Не классифицирован">❓</span>
-                        }
-                        else
-                        {
-                            <span class="badge @(c.IsRelevant == true ? "bg-success" : "bg-secondary")">
-                                @(c.IsRelevant == true ? "✓" : "✕")
-                            </span>
-                        }
-                    </td>
-                    <!-- Category -->
-                    <td>
-                        @if (!string.IsNullOrWhiteSpace(c.Category))
-                        {
-                            <span class="badge bg-info text-dark small">@c.Category</span>
-                        }
-                        else { <span class="text-muted">—</span> }
-                    </td>
-                    <!-- Tags -->
-                    <td>
-                        @if (!string.IsNullOrWhiteSpace(c.Tags))
-                        {
-                            @foreach (var tag in c.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries).Take(3))
-                            {
-                                <span class="badge bg-light text-secondary border me-1 small">@tag</span>
-                            }
-                        }
-                        else { <span class="text-muted">—</span> }
-                    </td>
-                    <!-- ShouldReply -->
-                    <td class="text-center">
-                        @if (c.ShouldReply == true)
-                        {
-                            <span class="badge bg-primary" title="Claude рекомендует ответить">ὊC</span>
-                        }
-                        else if (c.ShouldReply == false)
-                        {
-                            <span class="text-muted small">—</span>
-                        }
-                        else
-                        {
-                            <span class="text-muted small">❓</span>
-                        }
-                    </td>
-                    <td class="text-muted small">@c.CommentCreatedAt.ToString("dd.MM.yy HH:mm")</td>
-                </tr>
-            }
+        @foreach (var c in _comments)
+        {
+            <tr>
+                <td><small>@c.VideoId[..Math.Min(8,c.VideoId.Length)]...</small></td>
+                <td>@c.AuthorUniqueId</td>
+                <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@c.Text</td>
+                <td>@c.LikeCount</td>
+                <td>@(c.IsRelevant.HasValue ? (c.IsRelevant.Value ? "✅" : "❌") : "—")</td>
+                <td>@c.CommentCreatedAt.ToString("MM-dd")</td>
+            </tr>
+        }
         </tbody>
     </table>
-    </div>
-
-    @if (_totalCount > _pageSize)
-    {
-        <div class="d-flex gap-2 align-items-center mt-2">
-            <button class="btn btn-sm btn-outline-secondary" @onclick="PrevPage" disabled="@(_page == 0)">← Назад</button>
-            <span class="text-muted small">Стр. @(_page + 1) / @((_totalCount + _pageSize - 1) / _pageSize)</span>
-            <button class="btn btn-sm btn-outline-secondary" @onclick="NextPage" disabled="@((_page + 1) * _pageSize >= _totalCount)">Вперёд →</button>
-        </div>
-    }
 }
 
 @code {
-    record CommentRow(
-        string  VideoId,
-        string? VideoDescription,
-        string  ChannelUniqueId,
-        string  CommentId,
-        string  Text,
-        string  AuthorUniqueId,
-        long    LikeCount,
-        bool?   IsRelevant,
-        int?    Score,
-        string? Category,
-        bool?   ShouldReply,
-        string? Tags,
-        DateTimeOffset CommentCreatedAt
-    );
+    bool _loading = true;
+    string _filterVideoId = "";
+    List<VideoComment> _comments = [];
+    int _total;
 
-    List<TrackedChannel> _channels          = [];
-    List<CommentRow>     _comments          = [];
-    bool   _loading                         = true;
-    bool   _deleting                        = false;
-    string _selectedChannelId               = "";
-    string _searchText                      = "";
-    string _sortBy                          = "date";
-    string _filterRelevant                  = "";
-    int    _page                            = 0;
-    int    _pageSize                        = 50;
-    int    _totalCount                      = 0;
-    int    _relevantCount                   = 0;
-    int    _replyCount                      = 0;
-    bool   _resetPage                       = true;
-    string? _deleteMsg                      = null;
-
-    protected override async Task OnInitializedAsync()
-    {
-        _channels = await Db.TrackedChannels.OrderBy(c => c.UniqueId).ToListAsync();
-        await LoadAsync();
-    }
+    protected override async Task OnInitializedAsync() => await LoadAsync();
 
     async Task LoadAsync()
     {
         _loading = true;
-        if (_resetPage) _page = 0;
-        _resetPage = true;
-        StateHasChanged();
-
-        var query = Db.VideoComments
-            .Include(c => c.Video).ThenInclude(v => v.Channel)
-            .AsQueryable();
-
-        if (Guid.TryParse(_selectedChannelId, out var chId))
-            query = query.Where(c => c.Video.TrackedChannelId == chId);
-
-        if (!string.IsNullOrWhiteSpace(_searchText))
-            query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
-
-        switch (_filterRelevant)
-        {
-            case "relevant":      query = query.Where(c => c.IsRelevant == true);  break;
-            case "irrelevant":    query = query.Where(c => c.IsRelevant == false); break;
-            case "unclassified":  query = query.Where(c => c.IsRelevant == null);  break;
-            case "reply":         query = query.Where(c => c.ShouldReply == true); break;
-        }
-
-        _totalCount    = await query.CountAsync();
-        _relevantCount = await query.CountAsync(c => c.IsRelevant == true);
-        _replyCount    = await query.CountAsync(c => c.ShouldReply == true);
-
-        query = _sortBy switch
-        {
-            "likes" => query.OrderByDescending(c => c.LikeCount),
-            "score" => query.OrderByDescending(c => c.Score),
-            _       => query.OrderByDescending(c => c.CommentCreatedAt)
-        };
-
-        var raw = await query
-            .Skip(_page * _pageSize)
-            .Take(_pageSize)
-            .Select(c => new {
-                c.VideoId,
-                VideoDescription = c.Video.Description,
-                ChannelUniqueId  = c.Video.Channel.UniqueId,
-                c.CommentId,
-                c.Text,
-                c.AuthorUniqueId,
-                c.LikeCount,
-                c.IsRelevant,
-                c.Score,
-                c.Category,
-                c.ShouldReply,
-                c.Tags,
-                c.CommentCreatedAt
-            })
-            .ToListAsync();
-
-        _comments = raw.Select(r => new CommentRow(
-            r.VideoId, r.VideoDescription, r.ChannelUniqueId,
-            r.CommentId, r.Text, r.AuthorUniqueId, r.LikeCount,
-            r.IsRelevant, r.Score, r.Category, r.ShouldReply, r.Tags,
-            r.CommentCreatedAt
-        )).ToList();
-
-        _loading = false;
+        await using var db = DbFactory.CreateDbContext();
+        var q = db.VideoComments.AsQueryable();
+        if (!string.IsNullOrWhiteSpace(_filterVideoId))
+            q = q.Where(c => c.VideoId == _filterVideoId);
+        _total    = await q.CountAsync();
+        _comments = await q.OrderByDescending(c => c.CommentCreatedAt).Take(200).ToListAsync();
+        _loading  = false;
     }
-
-    async Task DeleteAllAsync()
-    {
-        bool confirmed = await JS.InvokeAsync<bool>(
-            "confirm", $"Удалить все {_totalCount} комментариев? Это действие нельзя отменить.");
-        if (!confirmed) return;
-
-        _deleting = true;
-        StateHasChanged();
-
-        // Build same filter query but for delete
-        var query = Db.VideoComments
-            .Include(c => c.Video).ThenInclude(v => v.Channel)
-            .AsQueryable();
-
-        if (Guid.TryParse(_selectedChannelId, out var chId))
-            query = query.Where(c => c.Video.TrackedChannelId == chId);
-        if (!string.IsNullOrWhiteSpace(_searchText))
-            query = query.Where(c => c.Text.ToLower().Contains(_searchText.ToLower()));
-        switch (_filterRelevant)
-        {
-            case "relevant":     query = query.Where(c => c.IsRelevant == true);  break;
-            case "irrelevant":   query = query.Where(c => c.IsRelevant == false); break;
-            case "unclassified": query = query.Where(c => c.IsRelevant == null);  break;
-            case "reply":        query = query.Where(c => c.ShouldReply == true); break;
-        }
-
-        var toDelete = await query.ToListAsync();
-        int count    = toDelete.Count;
-        Db.VideoComments.RemoveRange(toDelete);
-        await Db.SaveChangesAsync();
-
-        _deleteMsg = $"Удалено {count} комментариев.";
-        _deleting  = false;
-        await LoadAsync();
-    }
-
-    async Task PrevPage()
-    {
-        if (_page > 0) { _page--; _resetPage = false; await LoadAsync(); }
-    }
-
-    async Task NextPage()
-    {
-        if ((_page + 1) * _pageSize < _totalCount) { _page++; _resetPage = false; await LoadAsync(); }
-    }
-
-    void ResetFilters()
-    {
-        _selectedChannelId = "";
-        _searchText        = "";
-        _sortBy            = "date";
-        _filterRelevant    = "";
-        _ = LoadAsync();
-    }
-
-    static string RowClass(CommentRow c) => c.IsRelevant switch
-    {
-        true  => "table-success",
-        false => "table-light",
-        null  => ""
-    };
-
-    static string ScoreBadge(int score) => score switch
-    {
-        >= 80 => "bg-success",
-        >= 60 => "bg-warning text-dark",
-        >= 40 => "bg-secondary",
-        _     => "bg-light text-muted border"
-    };
 }

@@ -1,296 +1,85 @@
 @page "/queries"
 @rendermode InteractiveServer
-@using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
+@using TikTokEcoBelarus.Domain.Entities
 @using Microsoft.EntityFrameworkCore
 @using System.Text.Json
 @using System.Text.Encodings.Web
-@inject AppDbContext Db
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject IJSRuntime JS
 
 <h4 class="mb-3">🔍 Поисковые запросы</h4>
 
-<!-- Экспорт / Импорт -->
-<div class="d-flex gap-2 mb-4 flex-wrap">
-    <button class="btn btn-outline-primary" @onclick="ExportJson">⬇️ Скачать JSON</button>
-    <label class="btn btn-outline-success mb-0">
-        ⬆️ Загрузить JSON
-        <InputFile OnChange="ImportJson" accept=".json" style="display:none" />
-    </label>
-    @if (_importMsg != null)
-    {
-        <span class="@(_importError ? "text-danger" : "text-success") small align-self-center">@_importMsg</span>
-    }
-</div>
-
-<!-- Добавить новый -->
-<div class="card mb-4 p-3">
-    <h6>Добавить запрос</h6>
-    <div class="row g-2">
-        <div class="col-md-2">
-            <select class="form-select form-select-sm" @bind="_newType">
-                <option value="hashtag">hashtag</option>
-                <option value="keyword">keyword</option>
-            </select>
-        </div>
-        <div class="col-md-3">
-            <input class="form-control form-control-sm" placeholder="Значение" @bind="_newValue" />
-        </div>
-        <div class="col-md-2">
-            <input type="date" class="form-control form-control-sm"
-                   @bind="_newDateFrom" />
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-success w-100" @onclick="AddQueryAsync">+ Добавить</button>
-        </div>
-    </div>
-</div>
-
-<!-- Список -->
 @if (_loading)
 {
     <p>Загрузка...</p>
 }
 else
 {
-    <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" @onclick="DisableAllAsync"
-                disabled="@(_queries.All(q => !q.IsActive))">
-            ⏸ Отключить все
-        </button>
-        <button class="btn btn-sm btn-outline-success" @onclick="EnableAllAsync"
-                disabled="@(_queries.All(q => q.IsActive))">
-            ▶ Включить все
-        </button>
-
-        <!-- Массовая установка DateFrom -->
-        <div class="d-flex gap-1 align-items-center ms-auto">
-            <label class="small text-muted mb-0 me-1">Дата для всех:</label>
-            <input type="date" class="form-control form-control-sm" style="width:150px"
-                   @bind="_bulkDateFrom" />
-            <button class="btn btn-sm btn-outline-warning" @onclick="SetDateAllAsync"
-                    disabled="@(_bulkDateFrom == null)">
-                🗓 Применить ко всем
-            </button>
-            <button class="btn btn-sm btn-outline-danger" @onclick="ClearDateAllAsync"
-                    disabled="@(_queries.All(q => q.DateFrom == null))">
-                ✕ Сбросить даты
-            </button>
-        </div>
-    </div>
-
     <table class="table table-sm table-hover">
-        <thead class="table-dark">
-            <tr>
-                <th>Тип</th>
-                <th>Значение</th>
-                <th>Видео не старше</th>
-                <th>Последний запуск</th>
-                <th>Активен</th>
-                <th></th>
-            </tr>
-        </thead>
+        <thead><tr><th>Запрос</th><th>Активен</th><th>Дата</th><th></th></tr></thead>
         <tbody>
-            @foreach (var q in _queries)
-            {
-                <tr class="@(!q.IsActive ? "text-muted" : "")">
-                    <td><span class="badge bg-secondary">@q.QueryType</span></td>
-                    <td>@q.Value</td>
-                    <td>
-                        <input type="date" class="form-control form-control-sm"
-                               style="width:150px"
-                               value="@(q.DateFrom?.ToString("yyyy-MM-dd") ?? "")"
-                               @onchange="e => UpdateDateFrom(q, e.Value?.ToString())" />
-                    </td>
-                    <td>@(q.LastRunAt?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
-                    <td>
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox"
-                                   checked="@q.IsActive"
-                                   @onchange="() => ToggleAsync(q)" />
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-danger"
-                                @onclick="() => DeleteAsync(q)">✕</button>
-                    </td>
-                </tr>
-            }
+        @foreach (var q in _queries)
+        {
+            <tr>
+                <td>@q.Keyword</td>
+                <td>@(q.IsActive ? "✅" : "❌")</td>
+                <td>@q.CreatedAt.ToString("yyyy-MM-dd")</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleAsync(q)">Переключить</button>
+                    <button class="btn btn-sm btn-outline-danger"    @onclick="() => DeleteAsync(q)">Удалить</button>
+                </td>
+            </tr>
+        }
         </tbody>
     </table>
+    <div class="d-flex gap-2 mt-3">
+        <input class="form-control" style="max-width:300px" placeholder="Новый запрос" @bind="_newKeyword" />
+        <button class="btn btn-primary" @onclick="AddAsync">Добавить</button>
+    </div>
 }
 
 @code {
-    List<SearchQuery> _queries = [];
     bool _loading = true;
-
-    string    _newType     = "hashtag";
-    string    _newValue    = "";
-    DateTime? _newDateFrom;
-    DateTime? _bulkDateFrom;
-
-    string? _importMsg   = null;
-    bool    _importError = false;
-
-    static readonly JsonSerializerOptions _exportOptions = new()
-    {
-        WriteIndented = true,
-        Encoder       = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-    };
-
-    // Helper: parse string → UTC DateTime, returns null if empty/invalid
-    static DateTime? ParseDateUtc(string? value)
-    {
-        if (!DateTime.TryParse(value, out var d)) return null;
-        return DateTime.SpecifyKind(d, DateTimeKind.Utc);
-    }
+    List<SearchQuery> _queries = [];
+    string _newKeyword = "";
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     async Task LoadAsync()
     {
-        _loading = true;
-        _queries = await Db.SearchQueries.OrderBy(q => q.Priority).ToListAsync();
+        await using var db = DbFactory.CreateDbContext();
+        _queries = await db.SearchQueries.OrderByDescending(q => q.CreatedAt).ToListAsync();
         _loading = false;
     }
 
     async Task ToggleAsync(SearchQuery q)
     {
-        q.IsActive = !q.IsActive;
-        await Db.SaveChangesAsync();
-    }
-
-    async Task DisableAllAsync()
-    {
-        foreach (var q in _queries)
-            q.IsActive = false;
-        await Db.SaveChangesAsync();
-    }
-
-    async Task EnableAllAsync()
-    {
-        foreach (var q in _queries)
-            q.IsActive = true;
-        await Db.SaveChangesAsync();
-    }
-
-    async Task UpdateDateFrom(SearchQuery q, string? value)
-    {
-        q.DateFrom = ParseDateUtc(value);
-        await Db.SaveChangesAsync();
-    }
-
-    /// <summary>Sets DateFrom = _bulkDateFrom (UTC) for every query in the list.</summary>
-    async Task SetDateAllAsync()
-    {
-        if (_bulkDateFrom == null) return;
-        var utcDate = DateTime.SpecifyKind(_bulkDateFrom.Value, DateTimeKind.Utc);
-        foreach (var q in _queries)
-            q.DateFrom = utcDate;
-        await Db.SaveChangesAsync();
-    }
-
-    /// <summary>Clears DateFrom for all queries.</summary>
-    async Task ClearDateAllAsync()
-    {
-        foreach (var q in _queries)
-            q.DateFrom = null;
-        await Db.SaveChangesAsync();
-    }
-
-    async Task AddQueryAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_newValue)) return;
-
-        var dateFromUtc = _newDateFrom.HasValue
-            ? DateTime.SpecifyKind(_newDateFrom.Value, DateTimeKind.Utc)
-            : (DateTime?)null;
-
-        Db.SearchQueries.Add(new SearchQuery
-        {
-            QueryType = _newType,
-            Value     = _newValue.Trim(),
-            DateFrom  = dateFromUtc,
-            Priority  = _queries.Count + 1,
-            IsActive  = true
-        });
-        await Db.SaveChangesAsync();
-
-        _newValue    = "";
-        _newDateFrom = null;
+        await using var db = DbFactory.CreateDbContext();
+        var row = await db.SearchQueries.FindAsync(q.Id);
+        if (row is null) return;
+        row.IsActive = !row.IsActive;
+        await db.SaveChangesAsync();
         await LoadAsync();
     }
 
     async Task DeleteAsync(SearchQuery q)
     {
-        Db.SearchQueries.Remove(q);
-        await Db.SaveChangesAsync();
+        await using var db = DbFactory.CreateDbContext();
+        var row = await db.SearchQueries.FindAsync(q.Id);
+        if (row is null) return;
+        db.SearchQueries.Remove(row);
+        await db.SaveChangesAsync();
         await LoadAsync();
     }
 
-    // ---- Export / Import ----
-
-    async Task ExportJson()
+    async Task AddAsync()
     {
-        var dto = _queries.Select(q => new QueryDto
-        {
-            QueryType = q.QueryType,
-            Value     = q.Value,
-            DateFrom  = q.DateFrom?.ToString("yyyy-MM-dd"),
-            Priority  = q.Priority,
-            IsActive  = q.IsActive
-        }).ToList();
-
-        var json  = JsonSerializer.Serialize(dto, _exportOptions);
-        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-        var b64   = Convert.ToBase64String(bytes);
-        await JS.InvokeVoidAsync("downloadFileFromBase64", "queries.json", "application/json", b64);
-    }
-
-    async Task ImportJson(InputFileChangeEventArgs e)
-    {
-        _importMsg = null; _importError = false;
-        try
-        {
-            using var stream = e.File.OpenReadStream(maxAllowedSize: 512 * 1024);
-            var list = await JsonSerializer.DeserializeAsync<List<QueryDto>>(stream,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (list == null || list.Count == 0) throw new Exception("Файл пустой или не распознан");
-
-            Db.SearchQueries.RemoveRange(await Db.SearchQueries.ToListAsync());
-            await Db.SaveChangesAsync();
-
-            int priority = 1;
-            foreach (var dto in list)
-            {
-                Db.SearchQueries.Add(new SearchQuery
-                {
-                    QueryType = dto.QueryType,
-                    Value     = dto.Value,
-                    DateFrom  = ParseDateUtc(dto.DateFrom),
-                    Priority  = dto.Priority > 0 ? dto.Priority : priority,
-                    IsActive  = dto.IsActive
-                });
-                priority++;
-            }
-            await Db.SaveChangesAsync();
-
-            _importMsg = $"✓ Загружено {list.Count} запросов";
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            _importError = true;
-            _importMsg   = $"Ошибка: {ex.Message}";
-        }
-    }
-
-    record QueryDto
-    {
-        public string  QueryType { get; init; } = "hashtag";
-        public string  Value     { get; init; } = "";
-        public string? DateFrom  { get; init; }
-        public int     Priority  { get; init; }
-        public bool    IsActive  { get; init; } = true;
+        if (string.IsNullOrWhiteSpace(_newKeyword)) return;
+        await using var db = DbFactory.CreateDbContext();
+        db.SearchQueries.Add(new SearchQuery { Keyword = _newKeyword.Trim(), IsActive = true, CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        _newKeyword = "";
+        await LoadAsync();
     }
 }

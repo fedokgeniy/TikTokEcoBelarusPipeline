@@ -1,305 +1,88 @@
 @page "/pipeline"
 @rendermode InteractiveServer
-@using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
 @using TikTokEcoBelarus.Services
 @using Microsoft.EntityFrameworkCore
-@inject AppDbContext Db
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject PipelineOrchestrator Orchestrator
 
 <h4 class="mb-3">⚙️ Pipeline</h4>
 
-<div class="card p-3 mb-4">
-
-    <!-- Пороги -->
-    <div class="row g-3 mb-2">
-        <div class="col-md-4">
-            <label class="form-label mb-1">🇧🇾 Порог Belarus Score</label>
-            <input type="number" class="form-control" min="0" max="1" step="0.01"
-                   @bind="_draftBelarus" disabled="@_running" />
-        </div>
-        <div class="col-md-4">
-            <label class="form-label mb-1">🌿 Порог Eco Score</label>
-            <input type="number" class="form-control" min="0" max="1" step="0.01"
-                   @bind="_draftEco" disabled="@_running" />
-        </div>
-        <div class="col-md-4">
-            <label class="form-label mb-1">📊 Макс. видео на запрос</label>
-            <input type="number" class="form-control" min="1" max="1000" step="1"
-                   @bind="_draftMax" disabled="@_running" />
-        </div>
-    </div>
-
-    <!-- Примененные значения + кнопки -->
-    <div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
-        <span class="text-muted small">
-            Текущие пороги:
-            BY ≥ <strong>@_minBelarus.ToString("F2")</strong> &nbsp;
-            ECO ≥ <strong>@_minEco.ToString("F2")</strong> &nbsp;
-            MAX <strong>@_maxPerQuery</strong>
-        </span>
-        @if (HasDraftChanges)
-        {
-            <button class="btn btn-sm btn-warning" @onclick="ApplyThresholds" disabled="@_running">
-                ✓ Сохранить пороги
-            </button>
-            <button class="btn btn-sm btn-outline-secondary" @onclick="ResetDraft" disabled="@_running">
-                ✕ Отмена
-            </button>
-        }
-        @if (_settingsSaved)
-        {
-            <span class="text-success small">✓ Сохранено</span>
-        }
-    </div>
-
-    <div class="d-flex align-items-center gap-3 flex-wrap">
-        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_running">
-            @if (_running)
-            { <span>⏳ Выполняется...</span> }
-            else
-            { <span>▶ Запустить pipeline</span> }
-        </button>
-
-        @if (_result != null)
-        {
-            @if (_result.Success)
-            {
-                <span class="text-success small">
-                    ✓ Найдено: @_result.Found | Новых: @_result.Saved | Дублей: @_result.Skipped |
-                    Время: @_result.Duration.ToString(@"mm\:ss")
-                </span>
-            }
-            else
-            {
-                <span class="text-danger small">✗ Ошибка: @_result.Error</span>
-            }
-        }
-    </div>
-
-    @if (_running)
+@if (_running)
+{
+    <p>Пайплайн запущен... @_progressText</p>
+}
+else if (_lastResult is not null)
+{
+    @if (_lastResult.Success)
     {
-        <div class="mt-3">
-            <div class="d-flex justify-content-between small text-muted mb-1">
-                <span>@_progressMsg</span>
-                <span>@_progressCurrent / @_progressTotal запросов</span>
-            </div>
-            <div class="progress" style="height:20px">
-                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
-                     style="width:@(_progressTotal > 0 ? (_progressCurrent * 100 / _progressTotal) : 5)%">
-                </div>
-            </div>
-            <div class="text-muted small mt-1">⏱ @((DateTime.UtcNow - _startedAt).ToString(@"mm\:ss")) прошло</div>
+        <div class="alert alert-success">
+            ✅ Готово! Найдено: @_lastResult.Found, Сохранено: @_lastResult.Saved, Обновлено: @_lastResult.Skipped (за @_lastResult.Duration.TotalSeconds.ToString("F1")s)
         </div>
     }
-
-    @if (_result != null && !_result.Success)
+    else
     {
-        <div class="alert alert-danger mt-2 small" style="white-space:pre-wrap">@_result.Error</div>
+        <div class="alert alert-danger">❌ @_lastResult.Error</div>
     }
+}
+
+<div class="d-flex gap-2 mb-3">
+    <button class="btn btn-primary" @onclick="RunPipeline" disabled="@_running">▶️ Запустить</button>
 </div>
 
-<h5 class="mb-3">📈 Статистика поисковых запросов</h5>
-
-@if (_loading)
-{
-    <p>Загрузка...</p>
-}
-else
+<h6>Последние видео (из БД)</h6>
+@if (_recentVideos is not null)
 {
     <table class="table table-sm table-hover">
-        <thead class="table-dark">
-            <tr>
-                <th>Запрос</th><th>Тип</th><th>Активен</th>
-                <th>Видео не старше</th><th>Последний запуск</th><th>Видео через запрос</th>
-            </tr>
-        </thead>
+        <thead><tr><th>ID</th><th>Автор</th><th>Belarus</th><th>Eco</th><th>Дата</th></tr></thead>
         <tbody>
-            @foreach (var s in _stats)
-            {
-                <tr>
-                    <td>@s.Value</td>
-                    <td><span class="badge bg-secondary">@s.QueryType</span></td>
-                    <td>@(s.IsActive ? "✓" : "✗")</td>
-                    <td>@(s.DateFrom?.ToString("dd.MM.yyyy") ?? "—")</td>
-                    <td>@(s.LastRunAt?.ToString("dd.MM.yyyy HH:mm") ?? "Никогда")</td>
-                    <td>@s.VideoCount</td>
-                </tr>
-            }
+        @foreach (var v in _recentVideos)
+        {
+            <tr>
+                <td><a href="@v.VideoUrl" target="_blank">@v.VideoId[..8]...</a></td>
+                <td>@v.AuthorUniqueId</td>
+                <td>@v.BelarusScore.ToString("F2")</td>
+                <td>@v.EcoScore.ToString("F2")</td>
+                <td>@v.FetchedAt.ToString("MM-dd HH:mm")</td>
+            </tr>
+        }
         </tbody>
     </table>
 }
 
 @code {
-    bool _loading = true;
-    bool _running = false;
-    bool _settingsSaved = false;
-    PipelineRunResult? _result;
-    List<QueryStat> _stats = [];
+    bool _running;
+    string _progressText = "";
+    PipelineRunResult? _lastResult;
+    List<TikTokEcoBelarus.Domain.Entities.Video>? _recentVideos;
 
-    // Применённые (из БД)
-    double _minBelarus  = 0.3;
-    double _minEco      = 0.3;
-    int    _maxPerQuery = 5;
+    protected override async Task OnInitializedAsync() => await LoadRecentAsync();
 
-    // Черновик
-    double _draftBelarus;
-    double _draftEco;
-    int    _draftMax;
-
-    bool HasDraftChanges =>
-        Math.Abs(_draftBelarus - _minBelarus) > 0.001 ||
-        Math.Abs(_draftEco    - _minEco)     > 0.001 ||
-        _draftMax != _maxPerQuery;
-
-    int      _progressCurrent;
-    int      _progressTotal;
-    string   _progressMsg = "";
-    DateTime _startedAt;
-    System.Threading.Timer? _timer;
-
-    protected override async Task OnInitializedAsync()
+    async Task LoadRecentAsync()
     {
-        await LoadSettingsAsync();
-        await LoadStatsAsync();
-    }
-
-    async Task LoadSettingsAsync()
-    {
-        var keys = new[] { "minBelarus", "minEco", "maxPerQuery" };
-        var rows = await Db.AppSettings
-            .Where(s => keys.Contains(s.Key))
-            .ToDictionaryAsync(s => s.Key, s => s.Value);
-
-        if (rows.TryGetValue("minBelarus", out var v1) &&
-            double.TryParse(v1, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var d1))
-            _minBelarus = d1;
-
-        if (rows.TryGetValue("minEco", out var v2) &&
-            double.TryParse(v2, System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var d2))
-            _minEco = d2;
-
-        if (rows.TryGetValue("maxPerQuery", out var v3) &&
-            int.TryParse(v3, out var i3))
-            _maxPerQuery = i3;
-
-        _draftBelarus = _minBelarus;
-        _draftEco     = _minEco;
-        _draftMax     = _maxPerQuery;
-    }
-
-    async Task ApplyThresholds()
-    {
-        _minBelarus  = Math.Clamp(_draftBelarus, 0, 1);
-        _minEco      = Math.Clamp(_draftEco,     0, 1);
-        _maxPerQuery = Math.Clamp(_draftMax,      1, 1000);
-        _draftBelarus = _minBelarus;
-        _draftEco     = _minEco;
-        _draftMax     = _maxPerQuery;
-
-        await UpsertSetting("minBelarus",  _minBelarus.ToString("F2", System.Globalization.CultureInfo.InvariantCulture));
-        await UpsertSetting("minEco",      _minEco.ToString("F2",     System.Globalization.CultureInfo.InvariantCulture));
-        await UpsertSetting("maxPerQuery", _maxPerQuery.ToString());
-
-        _settingsSaved = true;
-        StateHasChanged();
-        await Task.Delay(2000);
-        _settingsSaved = false;
-    }
-
-    async Task UpsertSetting(string key, string value)
-    {
-        var row = await Db.AppSettings.FindAsync(key);
-        if (row == null)
-            Db.AppSettings.Add(new AppSetting { Key = key, Value = value });
-        else
-            row.Value = value;
-        await Db.SaveChangesAsync();
-    }
-
-    void ResetDraft()
-    {
-        _draftBelarus = _minBelarus;
-        _draftEco     = _minEco;
-        _draftMax     = _maxPerQuery;
-    }
-
-    async Task LoadStatsAsync()
-    {
-        _loading = true;
-        _stats = await Db.SearchQueries
-            .Select(q => new QueryStat
-            {
-                Value      = q.Value,
-                QueryType  = q.QueryType,
-                IsActive   = q.IsActive,
-                DateFrom   = q.DateFrom,
-                LastRunAt  = q.LastRunAt,
-                VideoCount = Db.Set<VideoSearchQueryLink>().Count(l => l.SearchQueryId == q.Id)
-            })
-            .OrderBy(s => s.Value)
+        await using var db = DbFactory.CreateDbContext();
+        _recentVideos = await db.Videos
+            .OrderByDescending(v => v.FetchedAt)
+            .Take(20)
             .ToListAsync();
-        _loading = false;
     }
 
-    async Task RunAsync()
+    async Task RunPipeline()
     {
-        if (HasDraftChanges) await ApplyThresholds();
-
-        _running         = true;
-        _result          = null;
-        _progressCurrent = 0;
-        _progressTotal   = 0;
-        _progressMsg     = "Инициализация...";
-        _startedAt       = DateTime.UtcNow;
+        _running = true;
+        _progressText = "";
+        _lastResult = null;
         StateHasChanged();
-
-        _timer = new System.Threading.Timer(
-            _ => InvokeAsync(StateHasChanged), null, 1000, 1000);
 
         var progress = new Progress<PipelineProgress>(p =>
         {
-            _progressCurrent = p.Current;
-            _progressTotal   = p.Total;
-            _progressMsg     = p.QueryName;
+            _progressText = $"{p.Current}/{p.Total} — {p.QueryName}";
             InvokeAsync(StateHasChanged);
         });
 
-        try
-        {
-            _result = await Orchestrator.RunAsync(
-                minBelarus: _minBelarus,
-                minEco:     _minEco,
-                progress:   progress);
-        }
-        catch (Exception ex)
-        {
-            _result = new PipelineRunResult
-            {
-                Error      = ex.ToString(),
-                StartedAt  = _startedAt,
-                FinishedAt = DateTime.UtcNow
-            };
-        }
-        finally
-        {
-            _timer?.Dispose();
-            _timer   = null;
-            _running = false;
-            await LoadStatsAsync();
-            StateHasChanged();
-        }
-    }
-
-    record QueryStat
-    {
-        public string    Value      { get; init; } = "";
-        public string    QueryType  { get; init; } = "";
-        public bool      IsActive   { get; init; }
-        public DateTime? DateFrom   { get; init; }
-        public DateTime? LastRunAt  { get; init; }
-        public int       VideoCount { get; init; }
+        _lastResult = await Orchestrator.RunAsync(progress: progress);
+        _running = false;
+        await LoadRecentAsync();
+        StateHasChanged();
     }
 }

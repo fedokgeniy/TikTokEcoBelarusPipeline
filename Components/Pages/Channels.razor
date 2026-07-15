@@ -1,577 +1,111 @@
 @page "/channels"
 @rendermode InteractiveServer
-@using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
-@using TikTokEcoBelarus.Infrastructure.Repositories
+@using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Pipeline
 @using TikTokEcoBelarus.Services
 @using Microsoft.EntityFrameworkCore
-@inject AppDbContext Db
+@inject IDbContextFactory<AppDbContext> DbFactory
 @inject ITrackedChannelRepository ChannelRepo
 @inject ChannelMonitorPipeline MonitorPipeline
 @inject TikTokApiClient TikTokApi
 
 <h4 class="mb-3">📡 Отслеживаемые каналы</h4>
 
-<!-- Форма добавления -->
-<div class="card mb-4 p-3">
-    <h6>Добавить канал</h6>
-    <div class="row g-2 align-items-end">
-        <div class="col-md-3">
-            <label class="form-label form-label-sm mb-1">@@username (без @@)</label>
-            <input class="form-control form-control-sm"
-                   placeholder="например: ecobelarus"
-                   @bind="_newUniqueId" />
-        </div>
-        <div class="col-md-3">
-            <label class="form-label form-label-sm mb-1">Отображаемое имя (необязательно)</label>
-            <input class="form-control form-control-sm"
-                   placeholder="Eco Belarus"
-                   @bind="_newDisplayName" />
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-success w-100" @onclick="AddChannelAsync">+ Добавить</button>
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-outline-primary w-100"
-                    @onclick="RunCheckAsync"
-                    disabled="@_checking">
-                @(_checking ? "Проверяю..." : "▶ Запустить проверку")
-            </button>
-        </div>
-    </div>
-    @if (!string.IsNullOrEmpty(_errorMessage))
-    {
-        <div class="alert alert-danger mt-2 mb-0 py-1 px-2">@_errorMessage</div>
-    }
-</div>
-
-<!-- Импорт подписок -->
-<div class="card mb-4 p-3">
-    <h6>📥 Импортировать подписки аккаунта</h6>
-    <p class="text-muted small mb-2">
-        Введите <strong>@@username</strong> аккаунта — secUid будет получен автоматически.
-        Все аккаунты из его подписок будут добавлены как отслеживаемые каналы.
-    </p>
-    <div class="row g-2 align-items-end">
-        <div class="col-md-5">
-            <label class="form-label form-label-sm mb-1">@@username аккаунта-источника</label>
-            <div class="input-group input-group-sm">
-                <span class="input-group-text">@@</span>
-                <input class="form-control form-control-sm"
-                       placeholder="ecobelarus"
-                       @bind="_importUsername" />
-            </div>
-        </div>
-        <div class="col-md-2">
-            <label class="form-label form-label-sm mb-1">Макс. подписок</label>
-            <input type="number" class="form-control form-control-sm"
-                   min="10" max="500" step="10"
-                   @bind="_importMaxCount" />
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-outline-success w-100"
-                    @onclick="ImportFollowingsAsync"
-                    disabled="@_importing">
-                @(_importing ? "Загружаю..." : "📥 Импортировать")
-            </button>
-        </div>
-        <div class="col-md-2">
-            <button class="btn btn-sm btn-outline-secondary w-100"
-                    @onclick="SaveImportUsernameAsync"
-                    title="Сохранить username в настройки">
-                💾 Сохранить
-            </button>
-        </div>
-    </div>
-    @if (!string.IsNullOrEmpty(_importMessage))
-    {
-        <div class="alert @(_importSuccess ? "alert-success" : "alert-warning") mt-2 mb-0 py-1 px-2 small">
-            @_importMessage
-        </div>
-    }
-    @if (_importPreview.Count > 0)
-    {
-        <div class="mt-3">
-            <p class="small text-muted mb-1">Найдено @_importPreview.Count подписок. Нажмите «Добавить все новые» для сохранения:</p>
-            <div class="d-flex gap-2 mb-2">
-                <button class="btn btn-sm btn-success" @onclick="AddAllFollowingsAsync" disabled="@_importing">
-                    ✅ Добавить все новые (@_importPreview.Count(u => !_existingUniqueIds.Contains(u.UniqueId)))
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="() => { _importPreview.Clear(); _importMessage = string.Empty; }">
-                    ✕ Сбросить
-                </button>
-            </div>
-            <div style="max-height:220px;overflow-y:auto;">
-                <table class="table table-sm table-bordered mb-0" style="font-size:.82rem">
-                    <thead class="table-light">
-                        <tr><th>@@username</th><th>Имя</th><th>Статус</th></tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var u in _importPreview)
-                        {
-                            var already = _existingUniqueIds.Contains(u.UniqueId);
-                            <tr class="@(already ? "table-secondary" : "")">
-                                <td>
-                                    <a href="https://www.tiktok.com/@@@u.UniqueId" target="_blank" rel="noopener noreferrer">
-                                        @@@u.UniqueId
-                                    </a>
-                                </td>
-                                <td>@(u.Nickname ?? "—")</td>
-                                <td>
-                                    @if (already)
-                                    { <span class="badge bg-secondary">уже добавлен</span> }
-                                    else
-                                    { <span class="badge bg-success">новый</span> }
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    }
-</div>
-
-<!-- Список каналов -->
 @if (_loading)
 {
     <p>Загрузка...</p>
 }
-else if (_channels.Count == 0)
-{
-    <div class="text-center text-muted py-5">
-        <div style="font-size:2rem;">📭</div>
-        <p class="mt-2">Нет отслеживаемых каналов.<br/>Добавьте первый канал выше.</p>
-    </div>
-}
 else
 {
     <table class="table table-sm table-hover">
-        <thead class="table-dark">
-            <tr>
-                <th>@@username</th>
-                <th>Имя</th>
-                <th>Видео (последнее)</th>
-                <th>Комментарии (сумма)</th>
-                <th>Последняя проверка</th>
-                <th>Активен</th>
-                <th></th>
-            </tr>
-        </thead>
+        <thead><tr><th>@@ UniqueId</th><th>Название</th><th>Активен</th><th>Видео</th><th>Комменты</th><th>Проверка</th><th></th></tr></thead>
         <tbody>
-            @foreach (var ch in _channels)
-            {
-                <tr class="@(!ch.IsActive ? "text-muted" : "")" style="cursor:pointer"
-                    @onclick="() => ToggleChannel(ch.Id)">
-                    <td>
-                        <a href="@($"https://www.tiktok.com/@{ch.UniqueId}")" target="_blank"
-                           @onclick:stopPropagation="true"
-                           rel="noopener noreferrer">@@@ch.UniqueId</a>
-                    </td>
-                    <td>@(ch.DisplayName ?? "—")</td>
-                    <td>
-                        @if (ch.LastVideoCount.HasValue)
-                        {
-                            <span class="badge bg-secondary">@ch.LastVideoCount</span>
-                        }
-                        else { <span class="text-muted">—</span> }
-                    </td>
-                    <td>
-                        @if (ch.LastCommentCount.HasValue)
-                        {
-                            <span class="badge bg-info text-dark">@ch.LastCommentCount</span>
-                        }
-                        else { <span class="text-muted">—</span> }
-                    </td>
-                    <td>@(ch.LastCheckedAt?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
-                    <td>
-                        <div class="form-check form-switch" @onclick:stopPropagation="true">
-                            <input class="form-check-input" type="checkbox"
-                                   checked="@ch.IsActive"
-                                   @onchange="() => ToggleActiveAsync(ch)" />
-                        </div>
-                    </td>
-                    <td @onclick:stopPropagation="true">
-                        <button class="btn btn-sm btn-outline-danger"
-                                @onclick="() => DeleteAsync(ch)">✕</button>
-                    </td>
-                </tr>
-
-                <!-- Раскрытые видео канала -->
-                @if (_expandedChannelId == ch.Id && ch.Videos.Count > 0)
-                {
-                    <tr>
-                        <td colspan="7" class="p-0">
-                            <div class="p-3 bg-white border-top">
-                                <h6 class="mb-2">🎬 Последние видео @@@ch.UniqueId</h6>
-                                <table class="table table-sm mb-0">
-                                    <thead class="table-light">
-                                        <tr>
-                                            <th></th>
-                                            <th>Описание</th>
-                                            <th>👁 Просмотры</th>
-                                            <th>❤ Лайки</th>
-                                            <th>💬 Комм.</th>
-                                            <th>↗ Репосты</th>
-                                            <th>Дата видео</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach (var v in ch.Videos.OrderByDescending(v => v.VideoCreatedAt).Take(10))
-                                        {
-                                            var videoKey = (ch.Id, v.VideoId);
-                                            <tr style="cursor:pointer" @onclick="() => ToggleComments(ch.Id, v.VideoId)">
-                                                <td style="width:24px">
-                                                    <span class="text-muted" style="font-size:.75rem">
-                                                        @(_expandedVideoKey == videoKey ? "▼" : "▶")
-                                                    </span>
-                                                </td>
-                                                <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                                                    <a href="@($"https://www.tiktok.com/@{ch.UniqueId}/video/{v.VideoId}")"
-                                                       target="_blank" rel="noopener noreferrer"
-                                                       @onclick:stopPropagation="true"
-                                                       title="@v.Description">
-                                                        @(v.Description?.Length > 55 ? v.Description[..55] + "…" : v.Description ?? "—")
-                                                    </a>
-                                                </td>
-                                                <td>@v.PlayCount.ToString("N0")</td>
-                                                <td>@v.LikeCount.ToString("N0")</td>
-                                                <td>
-                                                    <span class="badge bg-info text-dark">@v.CommentCount.ToString("N0")</span>
-                                                </td>
-                                                <td>@v.ShareCount.ToString("N0")</td>
-                                                <td>@v.VideoCreatedAt.ToString("dd.MM.yy")</td>
-                                            </tr>
-
-                                            <!-- Комментарии к видео (третий уровень) -->
-                                            @if (_expandedVideoKey == videoKey)
-                                            {
-                                                <tr>
-                                                    <td colspan="7" class="p-0">
-                                                        <div class="px-4 py-2" style="background:#f8f9ff;border-top:1px solid #dee2e6">
-                                                            @if (_commentsLoading)
-                                                            {
-                                                                <p class="text-muted small mb-0">Загрузка комментариев...</p>
-                                                            }
-                                                            else if (_expandedComments.Count == 0)
-                                                            {
-                                                                <p class="text-muted small mb-0">💬 Комментарии не найдены для этого видео.</p>
-                                                            }
-                                                            else
-                                                            {
-                                                                <p class="text-muted small mb-2">💬 <strong>@_expandedComments.Count</strong> комментариев (последние)</p>
-                                                                <table class="table table-sm table-borderless mb-0" style="font-size:.82rem">
-                                                                    <thead>
-                                                                        <tr class="text-muted">
-                                                                            <th>Автор</th>
-                                                                            <th>Текст</th>
-                                                                            <th>❤</th>
-                                                                            <th>Дата</th>
-                                                                        </tr>
-                                                                    </thead>
-                                                                    <tbody>
-                                                                        @foreach (var c in _expandedComments)
-                                                                        {
-                                                                            <tr>
-                                                                                <td style="white-space:nowrap">
-                                                                                    <a href="@($"https://www.tiktok.com/@{c.AuthorUniqueId}")" target="_blank"
-                                                                                       rel="noopener noreferrer" class="text-decoration-none text-muted">
-                                                                                        @@@c.AuthorUniqueId
-                                                                                    </a>
-                                                                                </td>
-                                                                                <td>@(c.Text.Length > 150 ? c.Text[..150] + "…" : c.Text)</td>
-                                                                                <td>
-                                                                                    @if (c.LikeCount > 0)
-                                                                                    { <span class="text-danger">@c.LikeCount</span> }
-                                                                                    else { <span class="text-muted">—</span> }
-                                                                                </td>
-                                                                                <td class="text-muted" style="white-space:nowrap">@c.CommentCreatedAt.ToString("dd.MM.yy HH:mm")</td>
-                                                                            </tr>
-                                                                        }
-                                                                    </tbody>
-                                                                </table>
-                                                            }
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            }
-                                        }
-                                    </tbody>
-                                </table>
-                            </div>
-                        </td>
-                    </tr>
-                }
-            }
+        @foreach (var ch in _channels)
+        {
+            <tr>
+                <td><a href="@ch.ProfileUrl" target="_blank">@@@ch.UniqueId</a></td>
+                <td>@ch.DisplayName</td>
+                <td>@(ch.IsActive ? "✅" : "❌")</td>
+                <td>@ch.LastVideoCount</td>
+                <td>@ch.LastCommentCount</td>
+                <td>@ch.LastCheckedAt?.ToString("MM-dd HH:mm")</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleAsync(ch)">Перекл</button>
+                    <button class="btn btn-sm btn-outline-danger"    @onclick="() => DeleteAsync(ch)">Удал</button>
+                </td>
+            </tr>
+        }
         </tbody>
     </table>
+    <div class="d-flex gap-2 mt-3">
+        <input class="form-control" style="max-width:280px" placeholder="@tiktok_username" @bind="_newUniqueId" />
+        <button class="btn btn-primary" @onclick="AddAsync">Добавить</button>
+        <button class="btn btn-success" @onclick="RunMonitorAsync" disabled="@_monitoring">🔄 Проверить каналы</button>
+    </div>
+    @if (!string.IsNullOrEmpty(_statusMsg)) { <p class="mt-2 text-success">@_statusMsg</p> }
 }
 
 @code {
-    // --- Существующие поля ---
-    List<TrackedChannel> _channels       = [];
-    bool   _loading          = true;
-    bool   _checking         = false;
-    string _newUniqueId      = "";
-    string _newDisplayName   = "";
-    string _errorMessage     = "";
-    Guid?  _expandedChannelId;
+    bool _loading = true, _monitoring = false;
+    List<TrackedChannel> _channels = [];
+    string _newUniqueId = "", _statusMsg = "";
 
-    (Guid ChannelId, string VideoId)? _expandedVideoKey;
-    List<VideoComment> _expandedComments = [];
-    bool _commentsLoading = false;
-
-    // --- Поля импорта подписок ---
-    string _importUsername  = "";   // @username аккаунта-источника
-    int    _importMaxCount  = 100;
-    bool   _importing       = false;
-    string _importMessage   = "";
-    bool   _importSuccess   = true;
-    List<TikTokEcoBelarus.Models.TikTokFollowingUser> _importPreview = [];
-    HashSet<string> _existingUniqueIds = [];
-
-    protected override async Task OnInitializedAsync()
-    {
-        // Загружаем сохранённый username из AppSettings
-        var row = await Db.AppSettings.FindAsync("sourceUsername");
-        if (row is not null) _importUsername = row.Value ?? "";
-
-        await LoadAsync();
-    }
+    protected override async Task OnInitializedAsync() => await LoadAsync();
 
     async Task LoadAsync()
     {
-        _loading  = true;
-        _channels = await Db.TrackedChannels
-            .OrderBy(c => c.CreatedAt)
-            .Include(c => c.Videos)
-            .ToListAsync();
-        _existingUniqueIds = _channels.Select(c => c.UniqueId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _loading = false;
+        _channels = await ChannelRepo.GetAllAsync();
+        _loading  = false;
     }
 
-    void ToggleChannel(Guid id)
+    async Task ToggleAsync(TrackedChannel ch)
     {
-        if (_expandedChannelId == id)
-        {
-            _expandedChannelId = null;
-            _expandedVideoKey  = null;
-            _expandedComments  = [];
-        }
-        else
-        {
-            _expandedChannelId = id;
-            _expandedVideoKey  = null;
-            _expandedComments  = [];
-        }
-    }
-
-    async Task ToggleComments(Guid channelId, string videoId)
-    {
-        var key = (channelId, videoId);
-        if (_expandedVideoKey == key)
-        {
-            _expandedVideoKey = null;
-            _expandedComments = [];
-            return;
-        }
-
-        _expandedVideoKey  = key;
-        _commentsLoading   = true;
-        _expandedComments  = [];
-        StateHasChanged();
-
-        _expandedComments = await Db.VideoComments
-            .Where(c => c.VideoId == videoId)
-            .OrderByDescending(c => c.CommentCreatedAt)
-            .Take(30)
-            .ToListAsync();
-
-        _commentsLoading = false;
-    }
-
-    async Task AddChannelAsync()
-    {
-        _errorMessage = "";
-        var uid = _newUniqueId.Trim().TrimStart('@');
-        if (string.IsNullOrWhiteSpace(uid))
-        {
-            _errorMessage = "Введите @username канала.";
-            return;
-        }
-
-        var existing = await ChannelRepo.GetByUniqueIdAsync(uid);
-        if (existing is not null)
-        {
-            _errorMessage = $"Канал @{uid} уже добавлен.";
-            return;
-        }
-
-        await ChannelRepo.AddAsync(new TrackedChannel
-        {
-            UniqueId    = uid,
-            DisplayName = string.IsNullOrWhiteSpace(_newDisplayName) ? null : _newDisplayName.Trim(),
-            IsActive    = true
-        });
-
-        _newUniqueId    = "";
-        _newDisplayName = "";
+        await using var db = DbFactory.CreateDbContext();
+        var row = await db.TrackedChannels.FindAsync(ch.Id);
+        if (row is null) return;
+        row.IsActive = !row.IsActive;
+        await db.SaveChangesAsync();
         await LoadAsync();
-    }
-
-    async Task ToggleActiveAsync(TrackedChannel ch)
-    {
-        ch.IsActive = !ch.IsActive;
-        await Db.SaveChangesAsync();
     }
 
     async Task DeleteAsync(TrackedChannel ch)
     {
-        Db.TrackedChannels.Remove(ch);
-        await Db.SaveChangesAsync();
+        await using var db = DbFactory.CreateDbContext();
+        var row = await db.TrackedChannels.FindAsync(ch.Id);
+        if (row is null) return;
+        db.TrackedChannels.Remove(row);
+        await db.SaveChangesAsync();
         await LoadAsync();
     }
 
-    async Task RunCheckAsync()
+    async Task AddAsync()
     {
-        _checking = true;
+        if (string.IsNullOrWhiteSpace(_newUniqueId)) return;
+        var info = await TikTokApi.GetUserInfoAsync(_newUniqueId.Trim());
+        await using var db = DbFactory.CreateDbContext();
+        db.TrackedChannels.Add(new TrackedChannel
+        {
+            UniqueId    = _newUniqueId.Trim(),
+            UserId      = info?.UserId,
+            DisplayName = info?.Nickname,
+            ProfileUrl  = info?.ProfileUrl ?? $"https://www.tiktok.com/@{_newUniqueId.Trim()}",
+            AvatarUrl   = info?.AvatarThumb,
+            IsActive    = true
+        });
+        await db.SaveChangesAsync();
+        _newUniqueId = "";
+        await LoadAsync();
+    }
+
+    async Task RunMonitorAsync()
+    {
+        _monitoring = true;
+        _statusMsg  = "Проверяю..";
         StateHasChanged();
-        try
-        {
-            // Читаем maxVideoAgeDays из AppSettings перед запуском
-            int maxVideoAgeDays = 5;
-            var ageDaysRow = await Db.AppSettings.FindAsync("pipeline:maxVideoAgeDays");
-            if (ageDaysRow is not null &&
-                int.TryParse(ageDaysRow.Value, out var parsed) && parsed > 0)
-                maxVideoAgeDays = parsed;
-
-            await MonitorPipeline.RunAsync(maxVideoAgeDays: maxVideoAgeDays);
-            await LoadAsync();
-        }
-        finally
-        {
-            _checking = false;
-        }
-    }
-
-    // -------------------------------------------------------
-    // Импорт подписок
-    // -------------------------------------------------------
-
-    void ClearImportPreview()
-    {
-        _importPreview.Clear();
-        _importMessage = string.Empty;
-    }
-
-    async Task SaveImportUsernameAsync()
-    {
-        var username = _importUsername.Trim().TrimStart('@');
-        if (string.IsNullOrWhiteSpace(username)) return;
-
-        var row = await Db.AppSettings.FindAsync("sourceUsername");
-        if (row is null)
-        {
-            Db.AppSettings.Add(new TikTokEcoBelarus.Domain.Entities.AppSetting
-            {
-                Key   = "sourceUsername",
-                Value = username
-            });
-        }
-        else
-        {
-            row.Value = username;
-        }
-        await Db.SaveChangesAsync();
-        _importMessage = $"✅ @{username} сохранён в настройках.";
-        _importSuccess = true;
-    }
-
-    async Task ImportFollowingsAsync()
-    {
-        _importMessage = "";
-        _importPreview.Clear();
-
-        var username = _importUsername.Trim().TrimStart('@');
-        if (string.IsNullOrWhiteSpace(username))
-        {
-            _importMessage = "Укажите @username аккаунта-источника.";
-            _importSuccess = false;
-            return;
-        }
-
-        _importing = true;
-        StateHasChanged();
-
-        try
-        {
-            // Шаг 1: получаем secUid по username автоматически
-            _importMessage = $"🔍 Получаю secUid для @{username}...";
-            _importSuccess = true;
-            StateHasChanged();
-
-            var userInfo = await TikTokApi.GetUserInfoAsync(username);
-            if (userInfo is null || string.IsNullOrWhiteSpace(userInfo.SecUid))
-            {
-                _importMessage = $"⚠️ Не удалось найти аккаунт @{username}. Проверьте username.";
-                _importSuccess = false;
-                return;
-            }
-
-            // Шаг 2: получаем подписки по secUid
-            _importMessage = $"📥 Загружаю подписки @{username}...";
-            StateHasChanged();
-
-            var followings = await TikTokApi.GetUserFollowingsAsync(userInfo.SecUid, _importMaxCount);
-
-            if (followings.Count == 0)
-            {
-                _importMessage = $"⚠️ У @{username} нет подписок или аккаунт закрыт.";
-                _importSuccess = false;
-                return;
-            }
-
-            _importPreview = followings;
-            int newCount   = followings.Count(u => !_existingUniqueIds.Contains(u.UniqueId));
-            _importMessage = $"Найдено {followings.Count} подписок у @{username}, из них {newCount} новых.";
-            _importSuccess = true;
-        }
-        catch (Exception ex)
-        {
-            _importMessage = $"❌ Ошибка: {ex.Message}";
-            _importSuccess = false;
-        }
-        finally
-        {
-            _importing = false;
-        }
-    }
-
-    async Task AddAllFollowingsAsync()
-    {
-        _importing = true;
-        StateHasChanged();
-
-        int added = 0;
-        foreach (var u in _importPreview)
-        {
-            if (_existingUniqueIds.Contains(u.UniqueId)) continue;
-
-            await ChannelRepo.AddAsync(new TrackedChannel
-            {
-                UniqueId    = u.UniqueId,
-                DisplayName = u.Nickname,
-                IsActive    = true
-            });
-            added++;
-        }
-
-        _importPreview.Clear();
-        _importMessage = $"✅ Добавлено {added} новых каналов.";
-        _importSuccess = true;
-        _importing     = false;
-
+        await MonitorPipeline.RunAsync();
+        _statusMsg  = "✅ Готово";
+        _monitoring = false;
         await LoadAsync();
     }
 }

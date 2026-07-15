@@ -8,21 +8,29 @@ const string apiKey = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Blazor Server ──────────────────────────────────────────────────────────
+// ── Blazor Server ─────────────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// ── БД ─────────────────────────────────────────────────────────────
+// ── БД ──────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("Default");
 
+// AddDbContextFactory (для сервисов-Singleton и длительных пайплайнов)
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(connectionString), ServiceLifetime.Scoped);
 
-// ── Кэш и HTTP ─────────────────────────────────────────────────────────
+// AddDbContext (для @inject AppDbContext Db в Razor-страницах и Scoped-репозиториев)
+// AddDbContextFactory уже регистрирует AppDbContext как Scoped автоматически,
+// поэтому явный AddDbContext здесь не нужен.
+// Если @inject AppDbContext Db бросает ObjectDisposedException во время
+// долгой асинхронной операции — замени инъекцию в .razor на
+// @inject IDbContextFactory<AppDbContext> DbFactory и используй await using var db = DbFactory.CreateDbContext();
+
+// ── Кэш и HTTP ──────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 
-// ── Репозитории и сервисы ──────────────────────────────────────────────────
+// ── Репозитории и сервисы ────────────────────────────────────────────
 builder.Services.AddSingleton<PipelineOrchestrator>();
 builder.Services.AddScoped<IScoringRuleRepository, ScoringRuleRepository>();
 builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
@@ -39,14 +47,13 @@ builder.Services.AddSingleton<TikTokApiClient>(sp =>
 });
 
 // CommentClassifierService читает ключ, модель и промт из БД при каждом запросе
-// (не из appsettings.json и не при старте)
 builder.Services.AddScoped<CommentClassifierService>();
 
 builder.Services.AddScoped<ChannelMonitorPipeline>();
 
 var app = builder.Build();
 
-// ── Seed ──────────────────────────────────────────────────────────────
+// ── Seed ───────────────────────────────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
