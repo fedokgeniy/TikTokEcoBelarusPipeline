@@ -42,6 +42,18 @@
         </div>
     </div>
 
+    <!-- Max video age -->
+    <div class="mb-4">
+        <label class="form-label fw-semibold">📅 Макс. возраст видео для сбора комментариев (дней)</label>
+        <input type="number" class="form-control" style="max-width:160px"
+               min="1" max="365" step="1"
+               @bind="_draftMaxVideoAgeDays" />
+        <div class="form-text text-muted">
+            Комментарии собираются только под видео не старше указанного числа дней.
+            Текущее значение в БД: <code>@_currentMaxVideoAgeDays</code> д.
+        </div>
+    </div>
+
     <!-- System Prompt -->
     <div class="mb-4">
         <label class="form-label fw-semibold">📝 Системный промт классификатора</label>
@@ -102,15 +114,18 @@
         <li>Если ключ пустой — классификатор пропускает батч и логирует предупреждение.</li>
         <li>Модель влияет на скорость и стоимость: Haiku ≈ $0.25/1M токенов, Sonnet ≈ $3/1M.</li>
         <li>Поле <code>score ≥ 70</code> — приоритет для ответа; <code>shouldReply = true</code> — есть запрос или проблема.</li>
+        <li>«Макс. возраст видео» — комментарии собираются только под видео не старше N дней (дефолт 5).</li>
     </ul>
 </div>
 
 @code {
-    const string KeyApiKey = "anthropic:apiKey";
-    const string KeyModel  = "anthropic:model";
-    const string KeyPrompt = "anthropic:systemPrompt";
+    const string KeyApiKey         = "anthropic:apiKey";
+    const string KeyModel          = "anthropic:model";
+    const string KeyPrompt         = "anthropic:systemPrompt";
+    const string KeyMaxVideoAgeDays = "pipeline:maxVideoAgeDays";
 
-    const string DefaultModel = "claude-haiku-4-5";
+    const string DefaultModel          = "claude-haiku-4-5";
+    const int    DefaultMaxVideoAgeDays = 5;
 
     const string DefaultPrompt =
         "Ты — классификатор комментариев для экологической горячей линии «Зелёный телефон» (Беларусь).\n" +
@@ -138,10 +153,12 @@
         "- Непонятный или обрезанный текст — score 0, tags [], shouldReply false.\n" +
         "- Не пропускай ни одного комментария из переданного списка.";
 
-    string _draftApiKey = "";
-    string _draftModel  = DefaultModel;
-    string _draftPrompt = DefaultPrompt;
-    string _currentModel = DefaultModel;
+    string _draftApiKey          = "";
+    string _draftModel           = DefaultModel;
+    string _draftPrompt          = DefaultPrompt;
+    int    _draftMaxVideoAgeDays = DefaultMaxVideoAgeDays;
+    string _currentModel         = DefaultModel;
+    int    _currentMaxVideoAgeDays = DefaultMaxVideoAgeDays;
 
     bool    _showKey    = false;
     bool    _saving     = false;
@@ -153,7 +170,7 @@
 
     async Task LoadAsync()
     {
-        var keys = new[] { KeyApiKey, KeyModel, KeyPrompt };
+        var keys = new[] { KeyApiKey, KeyModel, KeyPrompt, KeyMaxVideoAgeDays };
         var rows = await Db.AppSettings
             .Where(s => keys.Contains(s.Key))
             .ToDictionaryAsync(s => s.Key, s => s.Value);
@@ -161,6 +178,19 @@
         _draftApiKey = rows.TryGetValue(KeyApiKey, out var k) ? k : "";
         _draftModel  = rows.TryGetValue(KeyModel,  out var m) ? m : DefaultModel;
         _draftPrompt = rows.TryGetValue(KeyPrompt, out var p) ? p : DefaultPrompt;
+
+        if (rows.TryGetValue(KeyMaxVideoAgeDays, out var ageDays) &&
+            int.TryParse(ageDays, out var parsed) && parsed > 0)
+        {
+            _draftMaxVideoAgeDays   = parsed;
+            _currentMaxVideoAgeDays = parsed;
+        }
+        else
+        {
+            _draftMaxVideoAgeDays   = DefaultMaxVideoAgeDays;
+            _currentMaxVideoAgeDays = DefaultMaxVideoAgeDays;
+        }
+
         _currentModel = _draftModel;
     }
 
@@ -176,9 +206,12 @@
             await UpsertAsync(KeyApiKey, _draftApiKey.Trim());
             await UpsertAsync(KeyModel,  _draftModel.Trim());
             await UpsertAsync(KeyPrompt, _draftPrompt.Trim());
-            _currentModel = _draftModel;
-            _savedError   = false;
-            _savedMsg     = "✓ Настройки сохранены";
+            await UpsertAsync(KeyMaxVideoAgeDays,
+                Math.Max(1, _draftMaxVideoAgeDays).ToString());
+            _currentModel           = _draftModel;
+            _currentMaxVideoAgeDays = Math.Max(1, _draftMaxVideoAgeDays);
+            _savedError = false;
+            _savedMsg   = "✓ Настройки сохранены";
         }
         catch (Exception ex)
         {

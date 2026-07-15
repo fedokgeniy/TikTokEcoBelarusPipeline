@@ -32,7 +32,7 @@
         <div class="col-md-2">
             <button class="btn btn-sm btn-success w-100" @onclick="AddChannelAsync">+ Добавить</button>
         </div>
-        <div class="col-md-3">
+        <div class="col-md-2">
             <button class="btn btn-sm btn-outline-primary w-100"
                     @onclick="RunCheckAsync"
                     disabled="@_checking">
@@ -439,7 +439,14 @@ else
         StateHasChanged();
         try
         {
-            await MonitorPipeline.RunAsync();
+            // Читаем maxVideoAgeDays из AppSettings перед запуском
+            int maxVideoAgeDays = 5;
+            var ageDaysRow = await Db.AppSettings.FindAsync("pipeline:maxVideoAgeDays");
+            if (ageDaysRow is not null &&
+                int.TryParse(ageDaysRow.Value, out var parsed) && parsed > 0)
+                maxVideoAgeDays = parsed;
+
+            await MonitorPipeline.RunAsync(maxVideoAgeDays: maxVideoAgeDays);
             await LoadAsync();
         }
         finally
