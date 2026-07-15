@@ -46,12 +46,12 @@
     <div class="mb-4">
         <label class="form-label fw-semibold">📝 Системный промт классификатора</label>
         <textarea class="form-control font-monospace"
-                  rows="10"
+                  rows="14"
                   @bind="_draftPrompt"
                   placeholder="Введите системный промт..."></textarea>
         <div class="form-text text-muted">
             Отправляется в Anthropic как <code>system</code>-сообщение.
-            Переменная <code>{comments}</code> подставляется автоматически.
+            Поддерживаемые поля ответа: <code>cid</code>, <code>score</code> (0–100), <code>category</code>, <code>shouldReply</code>, <code>tags</code>.
         </div>
     </div>
 
@@ -63,12 +63,35 @@
         <button class="btn btn-outline-secondary" @onclick="ResetDraftAsync" disabled="@_saving">
             ↩ Сбросить к текущим
         </button>
+        <button class="btn btn-outline-info btn-sm" @onclick="SetDefaultPrompt">
+            🔄 Загрузить стандартный
+        </button>
         @if (_savedMsg != null)
         {
             <span class="@(_savedError ? "text-danger" : "text-success") small">@_savedMsg</span>
         }
     </div>
 
+</div>
+
+<!-- JSON-схема ответа -->
+<div class="card p-3 mb-3" style="max-width:800px; border-color:#dee2e6">
+    <h6 class="mb-2 text-muted">📄 Ожидаемая JSON-схема ответа</h6>
+    <pre class="small bg-light p-2 rounded mb-0" style="overflow-x:auto">[
+  {
+    "cid": "&lt;comment_id&gt;",
+    "score": 85,            // 0–100: релевантность для «Зелёного телефона»
+    "category": "свалки/отходы",  // см. список ниже
+    "shouldReply": true,    // есть вопрос/проблема — нужен ответ
+    "tags": ["waste", "illegal-dumping"]
+  }
+]</pre>
+    <div class="mt-2 small text-muted">
+        Категории: <code>свалки/отходы</code> | <code>вырубка/зелёные насаждения</code> | <code>вода</code> |
+        <code>воздух</code> | <code>животные</code> | <code>борщевик/растения</code> |
+        <code>права и жалобы</code> | <code>вопрос-консультация</code> |
+        <code>эмоция по экотеме</code> | <code>не по теме</code>
+    </div>
 </div>
 
 <!-- Подсказки -->
@@ -78,30 +101,46 @@
         <li>Ключ и промт читаются из БД при каждом запуске пайплайна.</li>
         <li>Если ключ пустой — классификатор пропускает батч и логирует предупреждение.</li>
         <li>Модель влияет на скорость и стоимость: Haiku ≈ $0.25/1M токенов, Sonnet ≈ $3/1M.</li>
-        <li>Промт должен просить вернуть <strong>JSON-массив</strong> с полями <code>cid</code>, <code>relevant</code>, <code>tags</code>.</li>
+        <li>Поле <code>score ≥ 70</code> — приоритет для ответа; <code>shouldReply = true</code> — есть запрос или проблема.</li>
     </ul>
 </div>
 
 @code {
-    // Keys used in AppSettings table
     const string KeyApiKey = "anthropic:apiKey";
     const string KeyModel  = "anthropic:model";
     const string KeyPrompt = "anthropic:systemPrompt";
 
     const string DefaultModel = "claude-haiku-4-5";
+
     const string DefaultPrompt =
-        "Ты — аналитик экологических данных. " +
-        "Тебе дают список комментариев из TikTok к видео об экологии Беларуси. " +
-        "Для каждого комментария определи: релевантен ли он экологической повестке Беларуси " +
-        "(загрязнение, природа, экология, реки, леса, воздух, отходы, климат, протесты, экоактивизм и т.п.). " +
-        "Верни ТОЛЬКО JSON-массив, без пояснений, без markdown. " +
-        "Формат каждого элемента: {\"cid\":\"<id>\",\"relevant\":<true|false>,\"tags\":[\"tag1\",\"tag2\"]}. " +
-        "Если комментарий нерелевантен — tags пустой массив. Теги на английском, строчными.";
+        "Ты — классификатор комментариев для экологической горячей линии «Зелёный телефон» (Беларусь).\n" +
+        "Наши интересы: свалки, загрязнение воды/воздуха, незаконные вырубки, животные, борщевик,\n" +
+        "экоправа граждан, жалобы на бездействие органов, вопросы «куда обратиться», локальные экопроблемы Беларуси.\n" +
+        "НЕ наши интересы: политика без экосоставляющей, реклама, флуд, оскорбления, лайфстайл, оффтоп.\n\n" +
+        "Для КАЖДОГО комментария верни JSON-объект со следующими полями:\n" +
+        "  cid        — id комментария (строка, передаётся без изменений)\n" +
+        "  score      — целое число 0–100 (коэффициент релевантности):\n" +
+        "    90–100: прямой запрос помощи или конкретное нарушение с местом\n" +
+        "    70–89: экопроблема или вопрос без конкретики места\n" +
+        "    40–69: эмоция/мнение по экотеме, нет запроса\n" +
+        "    10–39: слабая связь — природа/животные без экосодержания\n" +
+        "    0–9: оффтоп, флуд, реклама, непонятный текст\n" +
+        "  category   — одна из строк: свалки/отходы | вырубка/зелёные насаждения |\n" +
+        "              вода | воздух | животные | борщевик/растения |\n" +
+        "              права и жалобы | вопрос-консультация | эмоция по экотеме | не по теме\n" +
+        "  shouldReply — true если есть вопрос, запрос помощи или конкретная проблема; false иначе\n" +
+        "  tags        — массив тегов на английском, строчными (пустой при score < 10)\n\n" +
+        "ПРАВИЛА:\n" +
+        "- Верни ТОЛЬКО JSON-массив без пояснений, без markdown, без преамбулы.\n" +
+        "- Оценивай только по тексту, не додумывай контекст.\n" +
+        "- Сарказм и мемы про экологию — score 40–69, не выше.\n" +
+        "- Комментарий на беларусском — оценивай так же, как на русском.\n" +
+        "- Непонятный или обрезанный текст — score 0, tags [], shouldReply false.\n" +
+        "- Не пропускай ни одного комментария из переданного списка.";
 
     string _draftApiKey = "";
     string _draftModel  = DefaultModel;
     string _draftPrompt = DefaultPrompt;
-
     string _currentModel = DefaultModel;
 
     bool    _showKey    = false;
@@ -122,9 +161,10 @@
         _draftApiKey = rows.TryGetValue(KeyApiKey, out var k) ? k : "";
         _draftModel  = rows.TryGetValue(KeyModel,  out var m) ? m : DefaultModel;
         _draftPrompt = rows.TryGetValue(KeyPrompt, out var p) ? p : DefaultPrompt;
-
         _currentModel = _draftModel;
     }
+
+    void SetDefaultPrompt() => _draftPrompt = DefaultPrompt;
 
     async Task SaveAsync()
     {
@@ -136,7 +176,6 @@
             await UpsertAsync(KeyApiKey, _draftApiKey.Trim());
             await UpsertAsync(KeyModel,  _draftModel.Trim());
             await UpsertAsync(KeyPrompt, _draftPrompt.Trim());
-
             _currentModel = _draftModel;
             _savedError   = false;
             _savedMsg     = "✓ Настройки сохранены";
@@ -146,18 +185,14 @@
             _savedError = true;
             _savedMsg   = $"Ошибка: {ex.Message}";
         }
-        finally
-        {
-            _saving = false;
-        }
+        finally { _saving = false; }
 
         StateHasChanged();
         await Task.Delay(3000);
         _savedMsg = null;
     }
 
-    async Task ResetDraftAsync()
-        => await LoadAsync();
+    async Task ResetDraftAsync() => await LoadAsync();
 
     async Task UpsertAsync(string key, string value)
     {
