@@ -6,15 +6,16 @@ namespace TikTokEcoBelarus.Infrastructure;
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    public DbSet<SearchQuery>          SearchQueries         => Set<SearchQuery>();
-    public DbSet<Video>                Videos                => Set<Video>();
-    public DbSet<VideoSearchQueryLink> VideoSearchQueryLinks => Set<VideoSearchQueryLink>();
-    public DbSet<ScoringRule>          ScoringRules          => Set<ScoringRule>();
-    public DbSet<ScoringRuleThreshold> ScoringRuleThresholds => Set<ScoringRuleThreshold>();
-    public DbSet<AppSetting>           AppSettings           => Set<AppSetting>();
-    public DbSet<TrackedChannel>       TrackedChannels       => Set<TrackedChannel>();
-    public DbSet<TrackedChannelVideo>  TrackedChannelVideos  => Set<TrackedChannelVideo>();
-    public DbSet<VideoComment>         VideoComments         => Set<VideoComment>();
+    public DbSet<SearchQuery>           SearchQueries          => Set<SearchQuery>();
+    public DbSet<Video>                 Videos                 => Set<Video>();
+    public DbSet<VideoSearchQueryLink>  VideoSearchQueryLinks  => Set<VideoSearchQueryLink>();
+    public DbSet<ScoringRule>           ScoringRules           => Set<ScoringRule>();
+    public DbSet<ScoringRuleThreshold>  ScoringRuleThresholds  => Set<ScoringRuleThreshold>();
+    public DbSet<AppSetting>            AppSettings            => Set<AppSetting>();
+    public DbSet<TrackedChannel>        TrackedChannels        => Set<TrackedChannel>();
+    public DbSet<TrackedChannelVideo>   TrackedChannelVideos   => Set<TrackedChannelVideo>();
+    public DbSet<VideoComment>          VideoComments          => Set<VideoComment>();
+    public DbSet<VideoCommentSnapshot>  VideoCommentSnapshots  => Set<VideoCommentSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,6 +25,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.ApplyConfiguration(new TrackedChannelConfiguration());
         modelBuilder.ApplyConfiguration(new TrackedChannelVideoConfiguration());
         modelBuilder.ApplyConfiguration(new VideoCommentConfiguration());
+        modelBuilder.ApplyConfiguration(new VideoCommentSnapshotConfiguration());
 
         modelBuilder.Entity<AppSetting>(b =>
         {

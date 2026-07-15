@@ -45,7 +45,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
         await db.SaveChangesAsync();
     }
 
-    /// <summary>Обновляет метаданные: UserId, ProfileUrl, DisplayName, AvatarUrl.</summary>
     public async Task SaveMetaAsync(TrackedChannel channel)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -88,10 +87,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
         await db.SaveChangesAsync();
     }
 
-    /// <summary>
-    /// Возвращает HashSet уже сохранённых VideoId для канала.
-    /// Используется в ChannelMonitorPipeline для delta-фильтрации.
-    /// </summary>
     public async Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -101,9 +96,6 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
             .ToHashSetAsync();
     }
 
-    /// <summary>
-    /// Сохраняет комментарии, пропуская дубликаты по CommentId.
-    /// </summary>
     public async Task SaveCommentsAsync(IEnumerable<VideoComment> comments)
     {
         var list = comments.ToList();
@@ -121,5 +113,55 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
 
         db.VideoComments.AddRange(toInsert);
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Возвращает видео канала, возраст которых ≤ maxAgeDays дней от текущего момента.
+    /// Фильтрует по VideoCreatedAt — дате публикации видео в TikTok.
+    /// </summary>
+    public async Task<List<TrackedChannelVideo>> GetVideosForCommentFetchAsync(
+        Guid channelId, int maxAgeDays)
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-maxAgeDays);
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.TrackedChannelVideos
+            .Where(v => v.TrackedChannelId == channelId && v.VideoCreatedAt >= cutoff)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Сохраняет снапшот числа комментариев. Дублируем уникальный индекс (VideoId+SnapshotAt)
+    /// и просто пропускаем, если такой момент времени уже записан.
+    /// </summary>
+    public async Task SaveSnapshotAsync(VideoCommentSnapshot snapshot)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        // Округляем до минуты чтобы не плодить дубликаты при повторных запусках в ту же минуту
+        var minute = new DateTimeOffset(
+            snapshot.SnapshotAt.Year, snapshot.SnapshotAt.Month, snapshot.SnapshotAt.Day,
+            snapshot.SnapshotAt.Hour, snapshot.SnapshotAt.Minute, 0, TimeSpan.Zero);
+
+        bool exists = await db.VideoCommentSnapshots
+            .AnyAsync(s => s.VideoId == snapshot.VideoId && s.SnapshotAt == minute);
+
+        if (exists) return;
+
+        snapshot.SnapshotAt = minute;
+        db.VideoCommentSnapshots.Add(snapshot);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Обновляет IsRelevant и Tags у комментария после классификации Haiku.
+    /// </summary>
+    public async Task UpdateCommentClassificationAsync(
+        string commentId, bool isRelevant, string? tags)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        await db.VideoComments
+            .Where(c => c.CommentId == commentId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.IsRelevant, isRelevant)
+                .SetProperty(c => c.Tags,       tags));
     }
 }

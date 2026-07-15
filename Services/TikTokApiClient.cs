@@ -123,14 +123,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/followings
-    //
-    // tiktok-api23 KNOWN BUG: hasMore is always false even when more
-    // followings exist. Real end-of-data signal = empty followings array
-    // OR no cursor returned. We ignore hasMore entirely and paginate
-    // until the array is empty or no valid cursor is found.
-    //
-    // Pagination cursor field names tried in order:
-    //   maxCursor, cursor, minCursor, minTime
     // ---------------------------------------------------------------
     public async Task<List<TikTokFollowingUser>> GetUserFollowingsAsync(
         string secUid,
@@ -139,9 +131,9 @@ public class TikTokApiClient
     {
         var result   = new List<TikTokFollowingUser>();
         long? cursor = null;
-        int pageSize = 30; // API ignores count > 30, always returns 30
+        int pageSize = 30;
         int page     = 0;
-        var seenIds  = new HashSet<string>(); // guard against infinite loops
+        var seenIds  = new HashSet<string>();
 
         Console.WriteLine($"[FOLLOWINGS] secUid={secUid[..Math.Min(20, secUid.Length)]}... maxCount={maxCount}");
 
@@ -162,7 +154,6 @@ public class TikTokApiClient
             var body = await SafeGetWithRetryAsync(url, ct, tag: $"FOLLOWINGS page={page + 1}");
             if (body is null) break;
 
-            // Log enough of the raw response to see all pagination fields
             Console.WriteLine($"[FOLLOWINGS RAW] {body[..Math.Min(500, body.Length)]}");
 
             try
@@ -190,7 +181,7 @@ public class TikTokApiClient
                     string? secUidUser = u.TryGetProperty("secUid",   out var sEl)  ? sEl.GetString()  : null;
 
                     if (string.IsNullOrWhiteSpace(uniqueId)) continue;
-                    if (!seenIds.Add(uniqueId)) continue; // duplicate — API looped
+                    if (!seenIds.Add(uniqueId)) continue;
 
                     result.Add(new TikTokFollowingUser
                     {
@@ -204,18 +195,15 @@ public class TikTokApiClient
                 page++;
                 Console.WriteLine($"[FOLLOWINGS] Page {page}: added={added}, total={result.Count}");
 
-                // TRUE stop condition: empty page = no more data
                 if (added == 0)
                 {
                     Console.WriteLine("[FOLLOWINGS] Empty page — all followings collected.");
                     break;
                 }
 
-                // Log hasMore for diagnostics only — DO NOT use it to stop
                 if (root.TryGetProperty("hasMore", out var hmEl))
                     Console.WriteLine($"[FOLLOWINGS] hasMore={hmEl} (ignored — known API bug)");
 
-                // Find next cursor (try all known field names)
                 long? nextCursor = null;
                 foreach (var field in new[] { "maxCursor", "cursor", "minCursor", "minTime" })
                 {
@@ -230,15 +218,12 @@ public class TikTokApiClient
 
                 Console.WriteLine($"[FOLLOWINGS] nextCursor={nextCursor}");
 
-                // No cursor returned and we got a full page — try without cursor
-                // (some API versions omit cursor on first page only)
                 if (nextCursor is null)
                 {
                     Console.WriteLine("[FOLLOWINGS] No cursor in response — stopping.");
                     break;
                 }
 
-                // Protect against cursor not advancing (infinite loop)
                 if (nextCursor == cursor)
                 {
                     Console.WriteLine("[FOLLOWINGS] Cursor unchanged — stopping to avoid loop.");
@@ -330,57 +315,108 @@ public class TikTokApiClient
     }
 
     // ---------------------------------------------------------------
-    // GET /api/comment/list?videoId=...&count=N
+    // GET /api/post/comments?videoId=...&count=50&cursor=N
+    //
+    // Эндпоинт /api/comment/list удалён провайдером (HTTP 404).
+    // Новый рабочий эндпоинт: /api/post/comments.
+    // Пагинация: cursor из поля "cursor" в ответе; stop когда hasMore=false
+    // или cursor не меняется.
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokComment> GetVideoCommentsAsync(
         string videoId,
-        int count = 20,
+        int pageSize = 50,
+        int maxPages = 20,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var url = $"{BaseUrl}/api/comment/list?videoId={Uri.EscapeDataString(videoId)}&count={count}";
-        Console.WriteLine($"[COMMENTS] GET {url}");
+        long cursor  = 0;
+        int  page    = 0;
+        var  seenIds = new HashSet<string>();
 
-        var body = await SafeGetStringAsync(url, ct);
-        if (body is null) yield break;
-
-        JsonDocument doc;
-        try { doc = JsonDocument.Parse(body); }
-        catch (Exception ex)
+        while (page < maxPages)
         {
-            Console.Error.WriteLine($"[COMMENTS PARSE ERROR] videoId={videoId}: {ex.Message}");
-            Console.Error.WriteLine($"Body: {body[..Math.Min(500, body.Length)]}");
-            yield break;
-        }
+            ct.ThrowIfCancellationRequested();
 
-        var root = doc.RootElement;
-        if (!root.TryGetProperty("comments", out var commentsArr)
-         || commentsArr.ValueKind != JsonValueKind.Array)
-        {
-            Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId}");
-            yield break;
-        }
+            var url = $"{BaseUrl}/api/post/comments" +
+                      $"?videoId={Uri.EscapeDataString(videoId)}" +
+                      $"&count={pageSize}" +
+                      $"&cursor={cursor}";
 
-        foreach (var c in commentsArr.EnumerateArray())
-        {
-            string? commentId  = c.TryGetProperty("cid",         out var cidEl)  ? cidEl.GetString()  : null;
-            string? text       = c.TryGetProperty("text",        out var textEl) ? textEl.GetString() : null;
-            long    likeCount  = c.TryGetProperty("digg_count",  out var lkEl)   ? lkEl.GetInt64()   : 0;
-            long    createTime = c.TryGetProperty("create_time", out var ctEl)   ? ctEl.GetInt64()   : 0;
+            Console.WriteLine($"[COMMENTS] videoId={videoId} page={page + 1} cursor={cursor}");
 
-            string? authorId = null;
-            if (c.TryGetProperty("user", out var userEl))
-                authorId = userEl.TryGetProperty("unique_id", out var uidEl) ? uidEl.GetString() : null;
+            var body = await SafeGetStringAsync(url, ct);
+            if (body is null) break;
 
-            if (commentId is null || text is null) continue;
-
-            yield return new TikTokComment
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(body); }
+            catch (Exception ex)
             {
-                CommentId      = commentId,
-                Text           = text,
-                AuthorUniqueId = authorId ?? string.Empty,
-                LikeCount      = likeCount,
-                CreatedAt      = DateTimeOffset.FromUnixTimeSeconds(createTime)
-            };
+                Console.Error.WriteLine($"[COMMENTS PARSE ERROR] videoId={videoId}: {ex.Message}");
+                break;
+            }
+
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("comments", out var commentsArr)
+             || commentsArr.ValueKind != JsonValueKind.Array)
+            {
+                Console.WriteLine($"[COMMENTS EMPTY] videoId={videoId} page={page + 1}");
+                break;
+            }
+
+            int yielded = 0;
+            foreach (var c in commentsArr.EnumerateArray())
+            {
+                string? commentId  = c.TryGetProperty("cid",               out var cidEl)   ? cidEl.GetString()   : null;
+                string? text       = c.TryGetProperty("text",              out var textEl)  ? textEl.GetString()  : null;
+                long    likeCount  = c.TryGetProperty("digg_count",        out var lkEl)    ? lkEl.GetInt64()    : 0;
+                long    replyTotal = c.TryGetProperty("reply_comment_total",out var rtEl)   ? rtEl.GetInt64()   : 0;
+                long    createTime = c.TryGetProperty("create_time",       out var ctEl)    ? ctEl.GetInt64()    : 0;
+
+                string? authorId = null;
+                string? authorUniqueId = null;
+                if (c.TryGetProperty("user", out var userEl))
+                {
+                    authorId       = userEl.TryGetProperty("uid",       out var uidEl)  ? uidEl.GetString()  : null;
+                    authorUniqueId = userEl.TryGetProperty("unique_id", out var uniqEl) ? uniqEl.GetString() : null;
+                }
+
+                if (commentId is null || text is null) continue;
+                if (!seenIds.Add(commentId)) continue;
+
+                yield return new TikTokComment
+                {
+                    CommentId      = commentId,
+                    Text           = text,
+                    AuthorUniqueId = authorUniqueId ?? authorId ?? string.Empty,
+                    LikeCount      = likeCount,
+                    ReplyCount     = replyTotal,
+                    CreatedAt      = DateTimeOffset.FromUnixTimeSeconds(createTime)
+                };
+                yielded++;
+            }
+
+            Console.WriteLine($"[COMMENTS] videoId={videoId} page={page + 1}: yielded={yielded}");
+
+            // Проверяем hasMore и следующий cursor
+            bool hasMore = root.TryGetProperty("hasMore", out var hmEl) && hmEl.GetBoolean();
+
+            long nextCursor = 0;
+            if (root.TryGetProperty("cursor", out var cEl2))
+            {
+                if (cEl2.ValueKind == JsonValueKind.Number)       nextCursor = cEl2.GetInt64();
+                else if (cEl2.ValueKind == JsonValueKind.String)  long.TryParse(cEl2.GetString(), out nextCursor);
+            }
+
+            page++;
+
+            if (!hasMore || nextCursor == 0 || nextCursor == cursor)
+            {
+                Console.WriteLine($"[COMMENTS DONE] videoId={videoId} total_pages={page}");
+                break;
+            }
+
+            cursor = nextCursor;
+            await Task.Delay(800, ct);
         }
     }
 

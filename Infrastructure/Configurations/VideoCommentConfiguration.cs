@@ -27,6 +27,13 @@ public class VideoCommentConfiguration : IEntityTypeConfiguration<VideoComment>
         builder.Property(c => c.AuthorUniqueId)
             .HasMaxLength(100);
 
+        builder.Property(c => c.IsRelevant)
+            .IsRequired(false);
+
+        builder.Property(c => c.Tags)
+            .HasMaxLength(500)
+            .IsRequired(false);
+
         builder.HasOne(c => c.Video)
             .WithMany(v => v.Comments)
             .HasForeignKey(c => c.VideoId)
