@@ -10,6 +10,10 @@ public class TikTokApiClient
     private readonly string _apiKey;
     private const string BaseUrl = "https://tiktok-api23.p.rapidapi.com";
 
+    // Retry config for transient API responses (202, 204)
+    private const int TransientMaxRetries   = 4;
+    private const int TransientRetryBaseMs  = 5000;
+
     public TikTokApiClient(HttpClient http, string apiKey)
     {
         _http = http;
@@ -20,6 +24,7 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/info?uniqueId=username
+    // Retries automatically on 202/204 (API still warming up cache).
     // ---------------------------------------------------------------
     public async Task<TikTokUserInfo?> GetUserInfoAsync(
         string uniqueId,
@@ -28,7 +33,7 @@ public class TikTokApiClient
         var url = $"{BaseUrl}/api/user/info?uniqueId={Uri.EscapeDataString(uniqueId)}";
         Console.WriteLine($"[USER INFO] GET {url}");
 
-        var body = await SafeGetStringAsync(url, ct);
+        var body = await SafeGetWithRetryAsync(url, ct, tag: $"USER INFO @{uniqueId}");
         if (body is null) return null;
 
         try
@@ -78,7 +83,7 @@ public class TikTokApiClient
         var url = $"{BaseUrl}/api/user/info-by-id?userId={Uri.EscapeDataString(userId)}";
         Console.WriteLine($"[USER INFO BY ID] GET {url}");
 
-        var body = await SafeGetStringAsync(url, ct);
+        var body = await SafeGetWithRetryAsync(url, ct, tag: $"USER INFO BY ID uid={userId}");
         if (body is null) return null;
 
         try
@@ -119,14 +124,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/user/followings
-    //
-    // tiktok-api23 may respond with HTTP 202 + {"message":"...processing"}
-    // when the backend hasn't cached the result yet.
-    // We retry up to MaxRetries times with increasing delay before giving up.
-    //
-    // Pagination: first page has no cursor; subsequent pages use
-    //   &maxCursor=<value> from the previous response.
-    // Stop when hasMore is falsy or no cursor is returned.
     // ---------------------------------------------------------------
     public async Task<List<TikTokFollowingUser>> GetUserFollowingsAsync(
         string secUid,
@@ -137,8 +134,6 @@ public class TikTokApiClient
         long? cursor = null;
         int pageSize = Math.Min(50, maxCount);
         int page     = 0;
-        const int MaxRetries   = 4;
-        const int RetryDelayMs = 5000; // 5 sec between retries on 202
 
         Console.WriteLine($"[FOLLOWINGS] secUid={secUid[..Math.Min(20, secUid.Length)]}... maxCount={maxCount}");
 
@@ -156,31 +151,7 @@ public class TikTokApiClient
             var url = urlBuilder.ToString();
             Console.WriteLine($"[FOLLOWINGS] Page {page + 1}, already={result.Count}, cursor={cursor?.ToString() ?? "(first)"}");
 
-            // --- Retry loop for HTTP 202 ---
-            string? body = null;
-            for (int attempt = 1; attempt <= MaxRetries; attempt++)
-            {
-                body = await SafeGetStringAsync(url, ct, allow202: true);
-                if (body is null) break; // hard error
-
-                // Check if it's the "still processing" response
-                if (body.Contains("still processing", StringComparison.OrdinalIgnoreCase)
-                 || body.Contains("Request accepted",  StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.WriteLine($"[FOLLOWINGS] 202 still processing (attempt {attempt}/{MaxRetries}), waiting {RetryDelayMs}ms...");
-                    if (attempt < MaxRetries)
-                        await Task.Delay(RetryDelayMs * attempt, ct); // exponential: 5s, 10s, 15s
-                    else
-                    {
-                        Console.WriteLine("[FOLLOWINGS] Max retries reached on 202, giving up.");
-                        body = null;
-                    }
-                    continue;
-                }
-
-                break; // got a real response
-            }
-
+            var body = await SafeGetWithRetryAsync(url, ct, tag: $"FOLLOWINGS page={page + 1}");
             if (body is null) break;
 
             Console.WriteLine($"[FOLLOWINGS RAW] {body[..Math.Min(300, body.Length)]}");
@@ -225,7 +196,6 @@ public class TikTokApiClient
 
                 if (added == 0) break;
 
-                // hasMore
                 bool hasMore = false;
                 if (root.TryGetProperty("hasMore", out var hmEl))
                 {
@@ -234,7 +204,6 @@ public class TikTokApiClient
                     if (hmEl.ValueKind == JsonValueKind.Number) hasMore = hmEl.GetInt32() != 0;
                 }
 
-                // next cursor
                 long? nextCursor = null;
                 foreach (var field in new[] { "maxCursor", "cursor", "minCursor", "minTime" })
                 {
@@ -320,7 +289,7 @@ public class TikTokApiClient
 
             if (newItems.Count == 0)
             {
-                Console.WriteLine($"[SEARCH END] All items duplicate — stopping.");
+                Console.WriteLine("[SEARCH END] All items duplicate — stopping.");
                 break;
             }
 
@@ -394,12 +363,58 @@ public class TikTokApiClient
     // Helpers
     // ---------------------------------------------------------------
 
-    /// <param name="allow202">When true, 202 responses are returned as body text
-    /// instead of being treated as errors, so callers can handle retry logic.</param>
-    private async Task<string?> SafeGetStringAsync(
+    /// <summary>
+    /// Wraps SafeGetStringAsync with automatic retry for transient API
+    /// responses: HTTP 202 (still processing) and HTTP 204 (empty body).
+    /// Delay grows linearly: base * attempt (5s, 10s, 15s, 20s).
+    /// </summary>
+    private async Task<string?> SafeGetWithRetryAsync(
         string url,
         CancellationToken ct,
-        bool allow202 = false)
+        string tag = "")
+    {
+        for (int attempt = 1; attempt <= TransientMaxRetries; attempt++)
+        {
+            var (body, statusCode) = await SafeGetStringInternalAsync(url, ct);
+
+            // Hard error (4xx/5xx) — no point retrying
+            if (statusCode >= 400)
+            {
+                Console.Error.WriteLine($"[{tag}] HTTP {statusCode} — hard error, giving up.");
+                return null;
+            }
+
+            // Real response
+            if (statusCode == 200 && !string.IsNullOrWhiteSpace(body))
+                return body;
+
+            // Transient: 202 or 204 or empty body on 200
+            string reason = statusCode == 202 ? "202 still processing"
+                          : statusCode == 204 ? "204 no content"
+                          : "200 empty body";
+
+            if (attempt < TransientMaxRetries)
+            {
+                int waitMs = TransientRetryBaseMs * attempt;
+                Console.WriteLine($"[{tag}] {reason} (attempt {attempt}/{TransientMaxRetries}), retrying in {waitMs / 1000}s...");
+                await Task.Delay(waitMs, ct);
+            }
+            else
+            {
+                Console.WriteLine($"[{tag}] {reason} after {TransientMaxRetries} attempts — giving up.");
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Raw HTTP GET. Returns (body, statusCode). Body may be empty.
+    /// Never throws on non-success status codes — returns them to caller.
+    /// </summary>
+    private async Task<(string? body, int statusCode)> SafeGetStringInternalAsync(
+        string url,
+        CancellationToken ct)
     {
         HttpResponseMessage resp;
         try { resp = await _http.GetAsync(url, ct); }
@@ -407,25 +422,22 @@ public class TikTokApiClient
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[HTTP ERROR] {url}: {ex.Message}");
-            return null;
+            return (null, 0);
         }
 
         var body = await resp.Content.ReadAsStringAsync(ct);
+        return (body, (int)resp.StatusCode);
+    }
 
-        // 202 Accepted = "still processing" — let caller decide
-        if ((int)resp.StatusCode == 202 && allow202)
-        {
-            Console.WriteLine($"[HTTP 202] {url}");
+    /// <summary>Simple wrapper for endpoints that don't need transient retry.</summary>
+    private async Task<string?> SafeGetStringAsync(string url, CancellationToken ct)
+    {
+        var (body, statusCode) = await SafeGetStringInternalAsync(url, ct);
+        if (statusCode is >= 200 and < 300 && !string.IsNullOrWhiteSpace(body))
             return body;
-        }
-
-        if (!resp.IsSuccessStatusCode)
-        {
-            Console.Error.WriteLine(
-                $"[API ERROR] {(int)resp.StatusCode} {url} | {body[..Math.Min(300, body.Length)]}");
-            return null;
-        }
-        return body;
+        if (statusCode != 0)
+            Console.Error.WriteLine($"[API ERROR] HTTP {statusCode} {url} | {(body ?? "")[..Math.Min(300, (body ?? "").Length)]}");
+        return null;
     }
 
     private static string? TryGetFirstUrl(JsonElement parent, string propName)
