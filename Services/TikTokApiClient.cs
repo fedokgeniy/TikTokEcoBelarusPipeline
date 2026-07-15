@@ -247,6 +247,16 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/search/video?keyword=...
+    //
+    // Известные особенности RapidAPI TikTok endpoint:
+    //   - cursor может зависать на одном значении (напр. 12) на многих страницах
+    //   - has_more=0 не отражает реальное наличие новых элементов
+    //   - offset-based пагинация: offset += фактическое кол-во элементов страницы
+    //
+    // Стратегия остановки (streak-based, tolerant к плохому API):
+    //   - emptyPageStreak >= 2   : подряд страниц с пустым itemList
+    //   - duplicatePageStreak >= 3: подряд страниц без новых videoId
+    //   - maxPages               : защитный лимит
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
@@ -254,9 +264,17 @@ public class TikTokApiClient
         int delayMs  = 1500,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        int offset  = 0;
-        int page    = 0;
-        var seenIds = new HashSet<string>();
+        const int PageSize            = 10; // fallback если API вернул 0 элементов
+        const int EmptyPageLimit      = 2;  // остановка после N подряд пустых страниц
+        const int DuplicatePageLimit  = 3;  // остановка после N подряд страниц без новых ID
+        const int LowYieldPageLimit   = 5;  // предупреждение при N подряд страницах с < 2 новых
+
+        int offset             = 0;
+        int page               = 0;
+        int emptyPageStreak    = 0;
+        int duplicatePageStreak = 0;
+        int lowYieldStreak     = 0;
+        var seenIds            = new HashSet<string>();
 
         while (page < maxPages)
         {
@@ -269,7 +287,11 @@ public class TikTokApiClient
             Console.WriteLine($"[SEARCH] Page {page + 1}/{maxPages} offset={offset}");
 
             var body = await SafeGetStringAsync(url, ct);
-            if (body is null) break;
+            if (body is null)
+            {
+                Console.WriteLine($"[SEARCH END] HTTP error or null body — stopping. keyword=\"{keyword}\"");
+                break;
+            }
 
             TikTokSearchResponse? response;
             try
@@ -280,38 +302,104 @@ public class TikTokApiClient
             {
                 Console.Error.WriteLine($"[SEARCH PARSE ERROR] {ex.Message}");
                 Console.Error.WriteLine($"Body: {body[..Math.Min(500, body.Length)]}");
+                Console.WriteLine($"[SEARCH END] parse error — stopping. keyword=\"{keyword}\"");
                 break;
             }
 
+            // --- Пустая страница ---
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
-                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\" offset={offset}: empty page.");
-                break;
+                emptyPageStreak++;
+                Console.WriteLine(
+                    $"[SEARCH EMPTY] Page {page + 1}: itemList null/empty " +
+                    $"(emptyPageStreak={emptyPageStreak}/{EmptyPageLimit})");
+
+                if (emptyPageStreak >= EmptyPageLimit)
+                {
+                    Console.WriteLine(
+                        $"[SEARCH END] repeated empty pages (emptyPageStreak={emptyPageStreak}) — stopping. " +
+                        $"keyword=\"{keyword}\"");
+                    break;
+                }
+
+                // advance offset by fallback pageSize to try shifting the window
+                offset += PageSize;
+                page++;
+                await Task.Delay(delayMs, ct);
+                continue;
             }
 
+            // Сброс счётчика пустых страниц
+            emptyPageStreak = 0;
+
+            int rawCount = response.ItemList.Count;
+
+            // Логируем первый и последний videoId для анализа перекрытий
+            string firstId = response.ItemList[0].Id ?? "null";
+            string lastId  = response.ItemList[rawCount - 1].Id ?? "null";
+            Console.WriteLine($"[SEARCH PAGE] firstId={firstId} lastId={lastId}");
+
+            // --- Дедупликация по videoId ---
             var newItems = response.ItemList
-                .Where(item => seenIds.Add(item.Id))
+                .Where(item => !string.IsNullOrEmpty(item.Id) && seenIds.Add(item.Id))
                 .ToList();
 
-            Console.WriteLine(
-                $"[SEARCH OK] Page {page + 1}: {response.ItemList.Count} items " +
-                $"({newItems.Count} new), cursor={response.Cursor}, has_more={response.HasMore} [ignored]");
+            int newCount    = newItems.Count;
+            int offsetNext  = offset + rawCount;
 
-            if (newItems.Count == 0)
+            Console.WriteLine(
+                $"[SEARCH OK] Page {page + 1}: raw={rawCount} new={newCount} " +
+                $"offsetNext={offsetNext} " +
+                $"cursor={response.Cursor} has_more={response.HasMore} [both ignored]");
+
+            // --- Дублирующая страница ---
+            if (newCount == 0)
             {
-                Console.WriteLine("[SEARCH END] All items duplicate — stopping.");
-                break;
+                duplicatePageStreak++;
+                Console.WriteLine(
+                    $"[SEARCH DUP] Page {page + 1}: all {rawCount} items already seen " +
+                    $"(duplicatePageStreak={duplicatePageStreak}/{DuplicatePageLimit})");
+
+                if (duplicatePageStreak >= DuplicatePageLimit)
+                {
+                    Console.WriteLine(
+                        $"[SEARCH END] repeated duplicate pages (duplicatePageStreak={duplicatePageStreak}) — stopping. " +
+                        $"keyword=\"{keyword}\"");
+                    break;
+                }
+            }
+            else
+            {
+                // Новые элементы найдены — сбрасываем streak дублей
+                duplicatePageStreak = 0;
+
+                // Проверка низкого выхода (опционально — только лог, не остановка)
+                if (newCount < 2)
+                {
+                    lowYieldStreak++;
+                    if (lowYieldStreak >= LowYieldPageLimit)
+                        Console.WriteLine(
+                            $"[SEARCH WARN] lowYieldStreak={lowYieldStreak}: " +
+                            $"consistently low new-video yield per page");
+                }
+                else
+                {
+                    lowYieldStreak = 0;
+                }
+
+                foreach (var item in newItems)
+                    yield return item;
             }
 
-            foreach (var item in newItems)
-                yield return item;
-
-            offset += response.ItemList.Count;
+            offset = offsetNext;
             page++;
 
             if (page < maxPages)
                 await Task.Delay(delayMs, ct);
         }
+
+        if (page >= maxPages)
+            Console.WriteLine($"[SEARCH END] max pages reached ({maxPages}) — stopping. keyword=\"{keyword}\"");
     }
 
     // ---------------------------------------------------------------
@@ -397,7 +485,6 @@ public class TikTokApiClient
 
             Console.WriteLine($"[COMMENTS] videoId={videoId} page={page + 1}: yielded={yielded}");
 
-            // Проверяем hasMore и следующий cursor
             bool hasMore = root.TryGetProperty("hasMore", out var hmEl) && hmEl.GetBoolean();
 
             long nextCursor = 0;
