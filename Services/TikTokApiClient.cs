@@ -114,6 +114,99 @@ public class TikTokApiClient
     }
 
     // ---------------------------------------------------------------
+    // GET /api/user/followings?secUid=...&count=30&max_time=0
+    // Возвращает список аккаунтов, на которые подписан пользователь.
+    // Пагинация через minTime: если API вернул minTime > 0, делаем ещё запрос.
+    // ---------------------------------------------------------------
+    public async Task<List<TikTokFollowingUser>> GetUserFollowingsAsync(
+        string secUid,
+        int maxCount = 200,
+        CancellationToken ct = default)
+    {
+        var result   = new List<TikTokFollowingUser>();
+        int maxTime  = 0;
+        int pageSize = Math.Min(30, maxCount);
+
+        Console.WriteLine($"[FOLLOWINGS] secUid={secUid[..Math.Min(20, secUid.Length)]}... maxCount={maxCount}");
+
+        while (result.Count < maxCount)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var url = $"{BaseUrl}/api/user/followings" +
+                      $"?secUid={Uri.EscapeDataString(secUid)}" +
+                      $"&count={pageSize}" +
+                      $"&max_time={maxTime}";
+
+            Console.WriteLine($"[FOLLOWINGS] GET page, already={result.Count}, max_time={maxTime}");
+
+            var body = await SafeGetStringAsync(url, ct);
+            if (body is null) break;
+
+            try
+            {
+                var doc  = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+
+                // API возвращает { followings: [...], minTime: N, total: N }
+                if (!root.TryGetProperty("followings", out var followingsArr)
+                 || followingsArr.ValueKind != JsonValueKind.Array)
+                {
+                    Console.WriteLine($"[FOLLOWINGS] Нет поля 'followings' в ответе, стоп.");
+                    break;
+                }
+
+                int added = 0;
+                foreach (var u in followingsArr.EnumerateArray())
+                {
+                    if (result.Count >= maxCount) break;
+
+                    string? uniqueId = null;
+                    if (u.TryGetProperty("uniqueId", out var uEl)) uniqueId = uEl.GetString();
+                    else if (u.TryGetProperty("unique_id", out var u2El)) uniqueId = u2El.GetString();
+
+                    string? nickname = null;
+                    if (u.TryGetProperty("nickname", out var nnEl)) nickname = nnEl.GetString();
+
+                    string? secUidUser = null;
+                    if (u.TryGetProperty("secUid", out var sEl)) secUidUser = sEl.GetString();
+
+                    if (string.IsNullOrWhiteSpace(uniqueId)) continue;
+
+                    result.Add(new TikTokFollowingUser
+                    {
+                        UniqueId = uniqueId,
+                        Nickname = nickname,
+                        SecUid   = secUidUser
+                    });
+                    added++;
+                }
+
+                Console.WriteLine($"[FOLLOWINGS] Добавлено {added}, итого {result.Count}");
+
+                if (added == 0) break; // пустая страница
+
+                // Читаем minTime для следующей страницы
+                if (root.TryGetProperty("minTime", out var minTimeEl) && minTimeEl.GetInt64() > 0)
+                    maxTime = (int)minTimeEl.GetInt64();
+                else
+                    break; // больше страниц нет
+
+                await Task.Delay(800, ct);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[FOLLOWINGS PARSE ERROR] {ex.Message}");
+                Console.Error.WriteLine($"Body: {body[..Math.Min(500, body.Length)]}");
+                break;
+            }
+        }
+
+        Console.WriteLine($"[FOLLOWINGS DONE] Итого найдено: {result.Count}");
+        return result;
+    }
+
+    // ---------------------------------------------------------------
     // GET /api/search/video?keyword=...
     //
     // ВАЖНО: tiktok-api23 ВСЕГДА возвращает has_more=0 — это баг API.
