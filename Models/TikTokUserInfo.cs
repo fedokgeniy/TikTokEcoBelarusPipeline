@@ -10,6 +10,9 @@ public class TikTokUserInfo
     /// <summary>Числовой TikTok UID (user.uid / user.id).</summary>
     public string? UserId      { get; init; }
 
+    /// <summary>secUid — нужен для запросов /api/user/followings и др.</summary>
+    public string? SecUid      { get; init; }
+
     public string? Nickname    { get; init; }
     public string? AvatarThumb { get; init; }
 
