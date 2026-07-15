@@ -3,9 +3,25 @@
 @using TikTokEcoBelarus.Domain.Entities
 @using TikTokEcoBelarus.Infrastructure
 @using Microsoft.EntityFrameworkCore
+@using System.Text.Json
+@using System.Text.Encodings.Web
 @inject AppDbContext Db
+@inject IJSRuntime JS
 
 <h4 class="mb-3">🔍 Поисковые запросы</h4>
+
+<!-- Экспорт / Импорт -->
+<div class="d-flex gap-2 mb-4 flex-wrap">
+    <button class="btn btn-outline-primary" @onclick="ExportJson">⬇️ Скачать JSON</button>
+    <label class="btn btn-outline-success mb-0">
+        ⬆️ Загрузить JSON
+        <InputFile OnChange="ImportJson" accept=".json" style="display:none" />
+    </label>
+    @if (_importMsg != null)
+    {
+        <span class="@(_importError ? "text-danger" : "text-success") small align-self-center">@_importMsg</span>
+    }
+</div>
 
 <!-- Добавить новый -->
 <div class="card mb-4 p-3">
@@ -93,9 +109,18 @@ else
     List<SearchQuery> _queries = [];
     bool _loading = true;
 
-    string _newType    = "hashtag";
-    string _newValue   = "";
+    string    _newType    = "hashtag";
+    string    _newValue   = "";
     DateTime? _newDateFrom;
+
+    string? _importMsg   = null;
+    bool    _importError = false;
+
+    static readonly JsonSerializerOptions _exportOptions = new()
+    {
+        WriteIndented = true,
+        Encoder       = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
@@ -146,7 +171,7 @@ else
         });
         await Db.SaveChangesAsync();
 
-        _newValue   = "";
+        _newValue    = "";
         _newDateFrom = null;
         await LoadAsync();
     }
@@ -156,5 +181,71 @@ else
         Db.SearchQueries.Remove(q);
         await Db.SaveChangesAsync();
         await LoadAsync();
+    }
+
+    // ---- Export / Import ----
+
+    async Task ExportJson()
+    {
+        var dto = _queries.Select(q => new QueryDto
+        {
+            QueryType = q.QueryType,
+            Value     = q.Value,
+            DateFrom  = q.DateFrom?.ToString("yyyy-MM-dd"),
+            Priority  = q.Priority,
+            IsActive  = q.IsActive
+        }).ToList();
+
+        var json  = JsonSerializer.Serialize(dto, _exportOptions);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        var b64   = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFileFromBase64", "queries.json", "application/json", b64);
+    }
+
+    async Task ImportJson(InputFileChangeEventArgs e)
+    {
+        _importMsg = null; _importError = false;
+        try
+        {
+            using var stream = e.File.OpenReadStream(maxAllowedSize: 512 * 1024);
+            var list = await JsonSerializer.DeserializeAsync<List<QueryDto>>(stream,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (list == null || list.Count == 0) throw new Exception("Файл пустой или не распознан");
+
+            Db.SearchQueries.RemoveRange(await Db.SearchQueries.ToListAsync());
+            await Db.SaveChangesAsync();
+
+            int priority = 1;
+            foreach (var dto in list)
+            {
+                Db.SearchQueries.Add(new SearchQuery
+                {
+                    QueryType = dto.QueryType,
+                    Value     = dto.Value,
+                    DateFrom  = DateTime.TryParse(dto.DateFrom, out var d) ? d : null,
+                    Priority  = dto.Priority > 0 ? dto.Priority : priority,
+                    IsActive  = dto.IsActive
+                });
+                priority++;
+            }
+            await Db.SaveChangesAsync();
+
+            _importMsg = $"✓ Загружено {list.Count} запросов";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _importError = true;
+            _importMsg   = $"Ошибка: {ex.Message}";
+        }
+    }
+
+    record QueryDto
+    {
+        public string  QueryType { get; init; } = "hashtag";
+        public string  Value     { get; init; } = "";
+        public string? DateFrom  { get; init; }
+        public int     Priority  { get; init; }
+        public bool    IsActive  { get; init; } = true;
     }
 }
