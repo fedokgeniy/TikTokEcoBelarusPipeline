@@ -9,13 +9,15 @@ public class ChannelMonitorPipeline(
     ITrackedChannelRepository channelRepo)
 {
     /// <summary>
-    /// Итерируется по активным каналам.
-    /// 1. Запрашивает /api/user/info — получает точный videoCount.
-    /// 2. Если currentVideoCount > LastVideoCount — вычисляет delta.
-    /// 3. Тянет видео из поиска, фильтруя только те VideoId, которых ещё нет в БД.
-    /// 4. Сохраняет новые видео в TrackedChannelVideos.
-    /// 5. Для каждого нового видео загружает последние комментарии и сохраняет их.
-    /// 6. Обновляет счётчики канала.
+    /// Проверяет активные каналы на появление новых видео.
+    ///
+    /// Изменения относительно предыдущей версии:
+    ///
+    /// 1. GetUserInfoByIdAsync удалён — /api/user/info-by-id всегда возвращает 204 No Content,
+    ///    все нужные поля (никнейм, аватарка, profileUrl) берём напрямую из GetUserInfoAsync.
+    ///
+    /// 2. GetVideoCommentsAsync отключён — /api/comment/list возвращает HTTP 404
+    ///    («Endpoint does not exist»), эндпоинт удалён провайдером API.
     /// </summary>
     public async Task RunAsync(int latestVideosLimit = 10, CancellationToken ct = default)
     {
@@ -38,7 +40,9 @@ public class ChannelMonitorPipeline(
     {
         Console.WriteLine($"[CHANNEL] Checking @{channel.UniqueId}...");
 
-        // 1. Получаем videoCount через /api/user/info
+        // 1. Все нужные метаданные (никнейм, аватарка, uid) читаем из /api/user/info.
+        //    GetUserInfoByIdAsync больше не вызываем — эндпоинт /api/user/info-by-id
+        //    постоянно возвращает 204 No Content.
         var userInfo = await api.GetUserInfoAsync(channel.UniqueId, ct);
         if (userInfo is null)
         {
@@ -46,26 +50,38 @@ public class ChannelMonitorPipeline(
             return;
         }
 
-        // 2. Резолвим метаданные при первом запуске
+        // 2. Актуализируем метаданные канала напрямую из userInfo
+        bool metaChanged = false;
+
         if (channel.UserId is null && userInfo.UserId is not null)
         {
-            var byId = await api.GetUserInfoByIdAsync(userInfo.UserId, ct);
-            channel.UserId     = userInfo.UserId;
-            channel.ProfileUrl = byId?.ProfileUrl ?? $"https://www.tiktok.com/@{channel.UniqueId}";
-            if (channel.DisplayName is null) channel.DisplayName = byId?.Nickname ?? userInfo.Nickname;
-            if (channel.AvatarUrl   is null) channel.AvatarUrl   = byId?.AvatarThumb ?? userInfo.AvatarThumb;
-            await channelRepo.SaveMetaAsync(channel);
+            channel.UserId = userInfo.UserId;
+            metaChanged = true;
             Console.WriteLine($"[CHANNEL] @{channel.UniqueId}: resolved uid={channel.UserId}");
         }
-        else
+
+        if (channel.ProfileUrl is null)
         {
-            bool metaChanged = false;
-            if (channel.DisplayName is null && userInfo.Nickname    is not null) { channel.DisplayName = userInfo.Nickname;    metaChanged = true; }
-            if (channel.AvatarUrl   is null && userInfo.AvatarThumb is not null) { channel.AvatarUrl   = userInfo.AvatarThumb; metaChanged = true; }
-            if (metaChanged) await channelRepo.SaveMetaAsync(channel);
+            channel.ProfileUrl = userInfo.ProfileUrl ?? $"https://www.tiktok.com/@{channel.UniqueId}";
+            metaChanged = true;
         }
 
-        // 3. Cross-validation: реагируем ТОЛЬКО если видео стало БОЛЬШЕ
+        if (channel.DisplayName is null && userInfo.Nickname is not null)
+        {
+            channel.DisplayName = userInfo.Nickname;
+            metaChanged = true;
+        }
+
+        if (channel.AvatarUrl is null && userInfo.AvatarThumb is not null)
+        {
+            channel.AvatarUrl = userInfo.AvatarThumb;
+            metaChanged = true;
+        }
+
+        if (metaChanged)
+            await channelRepo.SaveMetaAsync(channel);
+
+        // 3. Реагируем только если видео стало БОЛЬШЕ
         int currentVideoCount = userInfo.VideoCount;
         int previousCount     = channel.LastVideoCount ?? 0;
         int delta             = currentVideoCount - previousCount;
@@ -84,28 +100,27 @@ public class ChannelMonitorPipeline(
             $"[CHANNEL] @{channel.UniqueId}: {delta} new video(s) detected " +
             $"({previousCount} → {currentVideoCount}). Fetching delta...");
 
-        // 4. Загружаем видео из поиска, берём только те VideoId, которых ещё нет в БД
+        // 4. Берём видео через поиск, фильтруем только новые
         var existingIds = await channelRepo.GetExistingVideoIdsAsync(channel.Id);
         var fetched     = new List<Models.TikTokItem>();
 
-        // maxPages=3 даёт до ~36 видео — с запасом даже при большом delta
         await foreach (var item in api.SearchVideosAsync(channel.UniqueId, maxPages: 3, ct: ct))
         {
             if (!item.Author.UniqueId.Equals(channel.UniqueId, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (existingIds.Contains(item.Id))
-                continue; // уже есть в БД — пропускаем
+                continue;
 
             fetched.Add(item);
 
-            // Ограничиваем: не тянем больше чем delta (или limit, что меньше)
             if (fetched.Count >= Math.Min(delta, limit)) break;
         }
 
+        // CommentCount берём из самих видео (фактический счётчик, отвечает действительности)
         int currentCommentCount = fetched.Sum(v => (int)v.Stats.CommentCount);
 
-        // 5. Сохраняем новые видео в TrackedChannelVideos
+        // 5. Сохраняем новые видео
         if (fetched.Count > 0)
         {
             var toSave = fetched.Select(item => new TrackedChannelVideo
@@ -125,36 +140,11 @@ public class ChannelMonitorPipeline(
             Console.WriteLine($"[CHANNEL] @{channel.UniqueId}: saved {toSave.Count} new video(s).");
         }
 
-        // 6. Скачиваем последние комментарии для каждого нового видео
-        var allComments = new List<VideoComment>();
-
-        foreach (var item in fetched)
-        {
-            Console.WriteLine($"[CHANNEL] Fetching comments for video {item.Id}...");
-            await foreach (var c in api.GetVideoCommentsAsync(item.Id, count: 20, ct: ct))
-            {
-                allComments.Add(new VideoComment
-                {
-                    VideoId          = item.Id,
-                    CommentId        = c.CommentId,
-                    Text             = c.Text.Length > 2000 ? c.Text[..2000] : c.Text,
-                    AuthorUniqueId   = c.AuthorUniqueId,
-                    LikeCount        = c.LikeCount,
-                    CommentCreatedAt = c.CreatedAt,
-                    FetchedAt        = DateTime.UtcNow
-                });
-            }
-            // Небольшая задержка между запросами комментариев (rate limit)
-            await Task.Delay(800, ct);
-        }
-
-        if (allComments.Count > 0)
-        {
-            await channelRepo.SaveCommentsAsync(allComments);
-            Console.WriteLine(
-                $"[CHANNEL] @{channel.UniqueId}: saved {allComments.Count} comment(s) " +
-                $"across {fetched.Count} video(s).");
-        }
+        // 6. Загрузка комментариев ОТКЛЮЧЕНА:
+        //    /api/comment/list возвращает HTTP 404 — эндпоинт был удалён провайдером API.
+        //    CommentCount уже хранится в TrackedChannelVideo.CommentCount из метаданных видео.
+        //    Когда провайдер восстановит эндпоинт — добавить обратно:
+        //      await foreach (var c in api.GetVideoCommentsAsync(item.Id, count: 20, ct)) { ... }
 
         // 7. Обновляем счётчики канала
         await channelRepo.UpdateAfterCheckAsync(
