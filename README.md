@@ -1,222 +1,126 @@
-# TikTokEcoBelarusPipeline
+# TikTok Eco Belarus Pipeline
 
-> ASP.NET Core + Blazor приложение для автоматического сбора, скоринга и хранения TikTok-видео по эко-тематике Беларуси.
+> **ASP.NET Core 10 · Blazor Server · PostgreSQL 16 · EF Core 9 · Docker**
 
----
-
-## Содержание
-
-- [Назначение](#назначение)
-- [Стек технологий](#стек-технологий)
-- [Архитектура](#архитектура)
-- [Структура проекта](#структура-проекта)
-- [Ключевые компоненты](#ключевые-компоненты)
-- [База данных](#база-данных)
-- [Скоринг](#скоринг)
-- [Веб-интерфейс](#веб-интерфейс)
-- [Запуск](#запуск)
-- [Конфигурация](#конфигурация)
-- [Известные ограничения](#известные-ограничения)
-
----
-
-## Назначение
-
-Проект собирает TikTok-видео по заданным поисковым запросам (ключевые слова и хэштеги), оценивает каждое видео по двум осям:
-
-- **BelarusScore** — насколько видео связано с Беларусью (географические названия, культура, авторы)
-- **EcoScore** — насколько видео связано с экологической тематикой
-
-Видео, прошедшие оба порога, сохраняются в PostgreSQL и отображаются в Blazor-интерфейсе.
-
----
-
-## Стек технологий
-
-| Компонент | Технология |
-|---|---|
-| Фреймворк | ASP.NET Core 9, Blazor SSR |
-| БД | PostgreSQL 16 (Docker) |
-| ORM | Entity Framework Core |
-| API | TikTok API via RapidAPI (`tiktok-api23`) |
-| UI | Blazor Components (`.razor`) |
-| Контейнеризация | Docker Compose |
+Автоматизированный pipeline для сбора, двойной оценки и мониторинга TikTok-контента, связанного с экологией Беларуси. Приложение работает в Blazor Server и управляется через веб-интерфейс без каких-либо внешних инструментов.
 
 ---
 
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Blazor Web UI                         │
-│   /  /videos  /pipeline  /queries  /scoring  /export    │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                 PipelineOrchestrator                     │
-│  (запуск по кнопке или таймеру, координация всего потока)│
-└──────┬───────────────┬──────────────────────────────────┘
-       │               │
-┌──────▼──────┐ ┌──────▼────────────────────┐
-│CollectionPi │ │   VideoDeduplicationService │
-│peline       │ │   (проверка дублей по VideoId)│
-│             │ └─────────────────────────────┘
-│ ┌─────────┐ │
-│ │TikTokApi│ │        ┌──────────────────────┐
-│ │Client   │ │        │   BelarusEcoScorer    │
-│ └────┬────┘ │        │  (правила из БД,      │
-│      │      ├───────►│   пороги minBY/minECO)│
-│      │API   │        └──────────────────────┘
-│      ▼      │
-│  RapidAPI   │        ┌──────────────────────┐
-│  ~23 видео  │        │   CsvExportService    │
-│  на запрос  │        │  (экспорт результатов)│
-└─────────────┘        └──────────────────────┘
-                                │
-               ┌────────────────▼──────────────┐
-               │         PostgreSQL             │
-               │  Videos, SearchQueries,        │
-               │  ScoringRules, AppSettings,    │
-               │  VideoSearchQueryLinks         │
-               └───────────────────────────────┘
-```
-
----
-
-## Структура проекта
-
-```
 TikTokEcoBelarusPipeline/
-├── Program.cs                        # DI, EF, маршруты, seed данных
-├── appsettings.json                  # строка подключения, RapidAPI ключ
-├── docker-compose.yml                # PostgreSQL контейнер
-│
-├── Pipeline/
-│   └── CollectionPipeline.cs         # основной цикл сбора и фильтрации
-│
-├── Services/
-│   ├── TikTokApiClient.cs            # HTTP-клиент RapidAPI, пагинация
-│   ├── BelarusEcoScorer.cs           # скоринг по правилам из БД
-│   ├── PipelineOrchestrator.cs       # координация: запуск, сохранение, экспорт
-│   ├── VideoDeduplicationService.cs  # дедупликация по VideoId
-│   └── CsvExportService.cs           # экспорт в CSV
-│
+├── Components/          # Blazor Server UI (Pages + Layout)
+│   └── Pages/
+│       ├── Dashboard.razor      — сводная статистика
+│       ├── Pipeline.razor       — запуск / прогресс пайплайна
+│       ├── Videos.razor         — таблица отобранных видео
+│       ├── Channels.razor       — трекинг каналов
+│       ├── Comments.razor       — комментарии к видео
+│       ├── Hashtags.razor       — хэштег-аналитика
+│       ├── Queries.razor        — управление поисковыми запросами
+│       └── Scoring.razor        — настройка правил скоринга
 ├── Domain/
-│   └── (доменные модели, интерфейсы)
-│
+│   └── Entities/        # EF Core-сущности: Video, SearchQuery, ScoringRule,
+│                        #   TrackedChannel, TrackedChannelVideo, VideoComment, …
 ├── Infrastructure/
-│   ├── AppDbContext.cs               # EF DbContext
-│   ├── Repositories/                 # репозитории для каждой сущности
-│   └── Migrations/                   # EF миграции
-│
-├── Models/
-│   ├── TikTokSearchResponse.cs       # десериализация ответа RapidAPI
-│   ├── ScoredVideo.cs                # результат скоринга
-│   ├── SearchQuery.cs                # поисковый запрос
-│   ├── ScoringRule.cs                # правило скоринга
-│   └── Video.cs                      # сущность видео в БД
-│
-└── Components/
-    └── Pages/                        # Blazor-страницы
-        ├── Index.razor               # дашборд
-        ├── Videos.razor              # список видео с фильтрами
-        ├── Pipeline.razor            # запуск пайплайна, настройки порогов
-        ├── Queries.razor             # управление поисковыми запросами
-        ├── Scoring.razor             # управление правилами скоринга
-        └── Export.razor              # экспорт CSV
+│   ├── AppDbContext.cs
+│   ├── SeedData.cs      # Автосид правил скоринга и поисковых запросов
+│   ├── Configurations/  # Fluent API конфигурации
+│   └── Repositories/    # IScoringRuleRepository, ISearchQueryRepository,
+│                        #   ITrackedChannelRepository
+├── Pipeline/
+│   ├── CollectionPipeline.cs    — постраничный сбор видео по ключевым словам
+│   └── ChannelMonitorPipeline.cs — мониторинг каналов на появление новых видео
+├── Services/
+│   ├── TikTokApiClient.cs       — клиент RapidAPI (async IAsyncEnumerable)
+│   ├── BelarusEcoScorer.cs      — двойной скоринг BY + ECO с кэшем правил
+│   ├── PipelineOrchestrator.cs  — оркестратор: запуск, сохранение в БД, CSV
+│   ├── CsvExportService.cs      — экспорт результатов через CsvHelper
+│   └── VideoDeduplicationService.cs
+├── Models/              # DTO / модели ответов TikTok API
+├── Migrations/          # EF Core migrations
+├── Program.cs
+├── appsettings.json
+└── docker-compose.yml
 ```
 
 ---
 
-## Ключевые компоненты
+## Как работает pipeline
 
-### TikTokApiClient
+### 1. CollectionPipeline — сбор по ключевым словам
 
-Обращается к `tiktok-api23.p.rapidapi.com/api/search/video` с параметрами `keyword`, `cursor`, `search_id`.
+1. Читает активные `SearchQuery` из БД (отсортированы по `Priority`).
+2. Постранично запрашивает `TikTokApiClient.SearchVideosAsync` (async stream).
+3. Каждое видео проходит через `BelarusEcoScorer`:
+   - **BelarusScore** — сумма весовых совпадений по категориям: `Belarus_Explicit`, `Belarus_City`, `Belarus_Place`, `Belarus_Language`, флаг 🇧🇾 в bio (+0.35), verified-бонус (+0.10).
+   - **EcoScore** — аналогичная логика по эко-ключевым словам.
+4. Видео сохраняется, только если `BelarusScore ≥ minBelarus` **И** `EcoScore ≥ minEco`.
+5. Остановка при наборе `maxVideos` прошедших видео на запрос (или `maxPagesHardLimit = 100` страниц).
 
-**Важные особенности:**
-- API возвращает **ровно 23 видео** на запрос (12 на странице 1 + 11 на странице 2), после чего `has_more=0`
-- Параметр `maxPages` в `SearchVideosAsync` — это лимит страниц, не видео
-- `search_id` берётся из `response.Extra.SearchRequestId` для корректной пагинации
-- Задержка между страницами: 1500ms по умолчанию
+### 2. ChannelMonitorPipeline — мониторинг каналов
 
-### CollectionPipeline
+1. Итерируется по активным `TrackedChannel`.
+2. Запрашивает `/api/user/info` → получает актуальный `videoCount`.
+3. Если `videoCount > LastVideoCount` → вычисляет дельту и тянет последние видео.
+4. Сохраняет только те `VideoId`, которых ещё нет в `TrackedChannelVideos`.
+5. Для каждого нового видео загружает последние комментарии → `VideoComments`.
+6. Обновляет `LastVideoCount` канала.
 
-Центральный цикл сбора. Для каждого активного `SearchQuery`:
-1. Вызывает `TikTokApiClient.SearchVideosAsync`
-2. Пропускает рекламные и приватные аккаунты
-3. Фильтрует по `DateFrom` если задано
-4. Скорит каждое видео через `BelarusEcoScorer`
-5. Логирует статистику `[STATS]` и топ-5 скоров при `passed=0`
+### 3. PipelineOrchestrator
 
-### BelarusEcoScorer
+Singleton-сервис, запускаемый из Blazor UI:
+- Берёт `maxPerQuery` из таблицы `AppSettings` (дефолт — 50).
+- Сохраняет видео в `Videos`, дедуплицирует через `VideoSearchQueryLink`.
+- Экспортирует результаты в CSV.
+- Возвращает `PipelineRunResult` с метриками `Found / Saved / Skipped / Duration`.
 
-Скорит видео на основе правил `ScoringRule` из БД. Каждое правило — это ключевое слово с весом, категорией (`belarus`/`eco`) и контекстом поиска (`description`, `hashtags`, `author_bio`). Пороги `minBelarus` и `minEco` хранятся в таблице `AppSettings`.
+---
 
-**Формула:**
-```
-BelarusScore = Σ(weight_i) для всех совпадений belarus-правил / maxPossibleScore
-EcoScore     = Σ(weight_i) для всех совпадений eco-правил / maxPossibleScore
-TotalScore   = (BelarusScore + EcoScore) / 2
-```
+## Скоринг-система
 
-Правила поддерживают `MaxMatches` — ограничение на количество учитываемых совпадений одного правила.
+`BelarusEcoScorer` полностью конфигурируется через БД. Правила и пороговые значения загружаются через `IScoringRuleRepository` и кэшируются в `IMemoryCache` (TTL — `ScoringCache:TtlMinutes`, по умолчанию 30 мин).
 
-### PipelineOrchestrator
+### Категории BelarusScore (из SeedData)
 
-Запускается из Blazor UI кнопкой или по расписанию. Последовательность:
-1. Читает `minBelarus`, `minEco`, `maxPerQuery` из `AppSettings`
-2. Запускает `CollectionPipeline.RunAsync`
-3. Дедуплицирует результаты через `VideoDeduplicationService`
-4. Сохраняет новые видео и связи `VideoSearchQueryLinks`
-5. Опционально экспортирует в CSV
+| Категория | Примеры ключевых слов | Weight | MaxMatches |
+|---|---|---|---|
+| `Belarus_Explicit` | беларусь, belarus, bielarus, 🇧🇾, by | 0.40 | 1 |
+| `Belarus_City` | минск, minsk, гродно, брест, витебск, могилев, гомель | 0.25 | 1 |
+| `Belarus_Place` | беловежская, нарочь, налибоки, припять, неман | 0.30 | 1 |
+| `Belarus_Language` | прырода, экалогія, лес | 0.10 | 99 (threshold) |
+
+Бонусы вне групп: 🇧🇾 в `author.signature` → **+0.35**, `verified` при `score > 0.2` → **+0.10**. Итоговый счёт нормируется до `[0, 1]`.
 
 ---
 
 ## База данных
 
-| Таблица | Назначение |
+Используется **PostgreSQL 16**. Миграции применяются автоматически при старте (`db.Database.MigrateAsync()`). Seed-данные добавляются один раз при первом запуске.
+
+### Основные таблицы
+
+| Таблица | Описание |
 |---|---|
-| `Videos` | Сохранённые видео со всеми метаданными и скорами |
-| `SearchQueries` | Поисковые запросы (keyword/hashtag, DateFrom, Priority) |
-| `VideoSearchQueryLinks` | M2M: какой запрос нашёл какое видео |
-| `ScoringRules` | Правила скоринга с весами |
-| `ScoringRuleThresholds` | Бонусные пороги (если N совпадений — +bonus) |
-| `AppSettings` | Настройки пайплайна: minBelarus, minEco, maxPerQuery |
-
-**Важно:** значения в `AppSettings` хранятся как строки. Разделитель дробной части — **точка** (`.`). При сохранении используется `InvariantCulture`.
-
----
-
-## Скоринг
-
-Правила скоринга управляются через страницу `/scoring` и хранятся в БД. Пример правил:
-
-| Keyword | Category | Context | Weight |
-|---|---|---|---|
-| беларусь | belarus | hashtags | 0.4 |
-| минск | belarus | description | 0.3 |
-| природа | eco | description | 0.3 |
-| экология | eco | hashtags | 0.5 |
-
-Эффективные запросы — комбинированные, типа `"природа минск"` — дают конверсию ~22% (5/23). Одиночные общие слова (`"лес"`, `"весна"`) дают 0% из-за отсутствия географической привязки.
+| `Videos` | Отобранные видео с оценками и метаданными |
+| `SearchQueries` | Поисковые запросы с приоритетом и фильтром по дате |
+| `VideoSearchQueryLinks` | M:N связь видео ↔ запрос |
+| `ScoringRules` | Правила скоринга (ключевые слова, веса, контексты) |
+| `ScoringRuleThresholds` | Ступенчатые пороги для категорий скоринга |
+| `TrackedChannels` | Отслеживаемые TikTok-каналы |
+| `TrackedChannelVideos` | Видео, найденные при мониторинге каналов |
+| `VideoComments` | Комментарии к видео каналов |
+| `AppSettings` | Key-value настройки (например, `maxPerQuery`) |
 
 ---
 
-## Веб-интерфейс
+## Быстрый старт
 
-| Страница | Описание |
-|---|---|
-| `/` | Дашборд: кол-во видео, средние скоры, топ авторов |
-| `/videos` | Таблица всех видео с пагинацией, сортировкой и фильтрами |
-| `/pipeline` | Запуск пайплайна, настройка порогов и `maxPerQuery` |
-| `/queries` | CRUD поисковых запросов, включение/отключение |
-| `/scoring` | CRUD правил скоринга и порогов |
-| `/export` | Экспорт текущей выборки в CSV |
+### Требования
 
----
-
-## Запуск
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- [Docker](https://www.docker.com/) (для PostgreSQL)
 
 ### 1. Запустить PostgreSQL
 
@@ -224,20 +128,22 @@ TotalScore   = (BelarusScore + EcoScore) / 2
 docker-compose up -d
 ```
 
-`docker-compose.yml` поднимает PostgreSQL 16 с:
-- `POSTGRES_USER=app`
-- `POSTGRES_PASSWORD=secret`
-- `POSTGRES_DB=tiktokeco`
+Поднимает PostgreSQL 16 на порту `5432` с базой `tiktokeco`, пользователем `app`, паролем `secret`.
 
-### 2. Настроить `appsettings.json`
+### 2. Настроить строку подключения
+
+`appsettings.json` уже содержит корректные параметры для docker-compose окружения:
 
 ```json
 {
   "ConnectionStrings": {
     "Default": "Host=localhost;Port=5432;Database=tiktokeco;Username=app;Password=secret"
   },
-  "RapidApi": {
-    "Key": "YOUR_RAPIDAPI_KEY"
+  "Pipeline": {
+    "IntervalMinutes": 60
+  },
+  "ScoringCache": {
+    "TtlMinutes": 30
   }
 }
 ```
@@ -246,39 +152,48 @@ docker-compose up -d
 
 ```bash
 dotnet run
-# или через Visual Studio / Rider
 ```
 
-При первом запуске EF автоматически применяет миграции и заполняет таблицы seed-данными (правила скоринга, поисковые запросы).
+При первом запуске автоматически:
+- Применяются все EF Core миграции.
+- Выполняется `SeedData` — заполняются правила скоринга и базовые поисковые запросы.
 
-### 4. Открыть браузер
-
-```
-https://localhost:65065
-```
+Приложение будет доступно по адресу `http://localhost:5000`.
 
 ---
 
 ## Конфигурация
 
-### AppSettings (в БД, страница `/pipeline`)
-
-| Ключ | Описание | По умолчанию |
+| Параметр | По умолчанию | Описание |
 |---|---|---|
-| `minBelarus` | Минимальный BelarusScore для сохранения | `0.20` |
-| `minEco` | Минимальный EcoScore для сохранения | `0.20` |
-| `maxPerQuery` | Максимум страниц API на один запрос | `5` |
+| `ConnectionStrings:Default` | см. appsettings.json | Строка подключения к PostgreSQL |
+| `Pipeline:IntervalMinutes` | `60` | Интервал автозапуска пайплайна |
+| `ScoringCache:TtlMinutes` | `30` | TTL кэша правил скоринга |
+| `maxPerQuery` (AppSettings) | `50` | Целевое кол-во видео на поисковый запрос |
+| `minBelarus` | `0.30` | Минимальный порог BelarusScore |
+| `minEco` | `0.30` | Минимальный порог EcoScore |
 
-> ⚠️ Значения хранятся с точкой (`.`) как разделителем. Если значения записаны с запятой, выполнить:
-> ```sql
-> UPDATE "AppSettings" SET "Value" = replace("Value", chr(44), chr(46))
-> WHERE "Key" IN ('minBelarus', 'minEco');
-> ```
+> **Важно:** API-ключ RapidAPI задаётся в `Program.cs`. Для продакшна вынесите его в `appsettings.json` или переменные окружения.
 
 ---
 
-## Известные ограничения
+## Зависимости
 
-- **API лимит:** `tiktok-api23` возвращает максимум 23 видео на запрос (2 страницы). `maxPerQuery > 2` не даёт дополнительных результатов для большинства запросов.
-- **Качество запросов:** одиночные слова без географической привязки дают 0% конверсию. Рекомендуются запросы вида `"<эко-тема> <город/регион Беларуси>"`.
-- **Культура чисел:** настройки порогов зависят от `InvariantCulture`. При смене локали сервера возможно повторное появление бага с запятой.
+| Пакет | Версия | Назначение |
+|---|---|---|
+| `Microsoft.EntityFrameworkCore` | 9.x | ORM |
+| `Npgsql.EntityFrameworkCore.PostgreSQL` | 9.x | PostgreSQL-провайдер |
+| `Microsoft.EntityFrameworkCore.Design` | 9.x | EF Core migrations |
+| `Microsoft.Extensions.Caching.Memory` | 10.x | Кэш правил скоринга |
+| `CsvHelper` | 33.1.0 | CSV-экспорт результатов |
+
+---
+
+## Технологический стек
+
+- **Runtime:** .NET 10 / ASP.NET Core
+- **UI:** Blazor Server (Interactive Server render mode)
+- **ORM:** Entity Framework Core 9 + Npgsql
+- **База данных:** PostgreSQL 16
+- **Контейнеризация:** Docker / docker-compose
+- **Внешний API:** TikTok via RapidAPI
