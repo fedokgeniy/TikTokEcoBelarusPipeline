@@ -182,7 +182,6 @@ public class ChannelMonitorPipeline(
             Console.WriteLine(
                 $"[CLASSIFIER] videoId={video.VideoId}: classifying {toClassify.Count} new comment(s)...");
 
-            // ✔ Dictionary<string, ClassifyResult> — новый тип
             Dictionary<string, ClassifyResult> classified;
             try
             {
@@ -194,22 +193,14 @@ public class ChannelMonitorPipeline(
                 continue;
             }
 
-            foreach (var (cid, result) in classified)
+            // Батч-апдейт: один DbContext на все результаты вместо N отдельных контекстов
+            try
             {
-                try
-                {
-                    await channelRepo.UpdateCommentClassificationAsync(
-                        cid,
-                        result.IsRelevant,
-                        result.Score,
-                        result.Category,
-                        result.ShouldReply,
-                        result.Tags);
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[CLASSIFIER SAVE ERROR] cid={cid}: {ex.Message}");
-                }
+                await channelRepo.UpdateCommentClassificationBatchAsync(classified, ct);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[CLASSIFIER SAVE ERROR] videoId={video.VideoId}: {ex.Message}");
             }
 
             int relevantCount = classified.Values.Count(v => v.IsRelevant);

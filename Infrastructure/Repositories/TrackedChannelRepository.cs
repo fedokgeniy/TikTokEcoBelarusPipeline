@@ -1,11 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using TikTokEcoBelarus.Domain.Entities;
+using TikTokEcoBelarus.Services;
 
 namespace TikTokEcoBelarus.Infrastructure.Repositories;
 
 /// <summary>
 /// Репозиторий для TrackedChannel и связанных сущностей.
 /// Каждый метод создаёт и уничтожает собственный DbContext через using.
+/// Исключение: UpdateCommentClassificationBatchAsync — один контекст на весь батч.
 /// </summary>
 public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory) : ITrackedChannelRepository
 {
@@ -141,7 +143,7 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
     }
 
     /// <summary>
-    /// Обновляет все поля AI-классификации после ответа от Claude.
+    /// Обновляет все поля AI-классификации после ответа от Claude (одиночный вызов).
     /// </summary>
     public async Task UpdateCommentClassificationAsync(
         string commentId, bool isRelevant, int score, string? category, bool shouldReply, string? tags)
@@ -155,5 +157,32 @@ public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory)
                 .SetProperty(c => c.Category,    category)
                 .SetProperty(c => c.ShouldReply, shouldReply)
                 .SetProperty(c => c.Tags,        tags));
+    }
+
+    /// <summary>
+    /// Батч-обновление классификации: открывает один DbContext на весь словарь,
+    /// выполняет ExecuteUpdateAsync для каждого CommentId.
+    /// Вместо N контекстов — один; вместо N раундтрипов — N лёгких UPDATE'ов в одном соединении.
+    /// </summary>
+    public async Task UpdateCommentClassificationBatchAsync(
+        Dictionary<string, ClassifyResult> results, CancellationToken ct = default)
+    {
+        if (results.Count == 0) return;
+
+        await using var db = await dbFactory.CreateDbContextAsync();
+
+        foreach (var (commentId, r) in results)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            await db.VideoComments
+                .Where(c => c.CommentId == commentId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(c => c.IsRelevant,  r.IsRelevant)
+                    .SetProperty(c => c.Score,       r.Score)
+                    .SetProperty(c => c.Category,    r.Category)
+                    .SetProperty(c => c.ShouldReply, r.ShouldReply)
+                    .SetProperty(c => c.Tags,        r.Tags), ct);
+        }
     }
 }

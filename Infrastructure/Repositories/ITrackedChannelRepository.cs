@@ -1,4 +1,5 @@
 using TikTokEcoBelarus.Domain.Entities;
+using TikTokEcoBelarus.Services;
 
 namespace TikTokEcoBelarus.Infrastructure.Repositories;
 
@@ -36,8 +37,15 @@ public interface ITrackedChannelRepository
     Task SaveSnapshotAsync(VideoCommentSnapshot snapshot);
 
     /// <summary>
-    /// Обновляет поля классификации комментария: IsRelevant, Score, Category, ShouldReply, Tags.
+    /// Обновляет поля классификации одного комментария: IsRelevant, Score, Category, ShouldReply, Tags.
     /// </summary>
     Task UpdateCommentClassificationAsync(
         string commentId, bool isRelevant, int score, string? category, bool shouldReply, string? tags);
+
+    /// <summary>
+    /// Батч-обновление классификации: один DbContext на весь словарь результатов.
+    /// Используется вместо цикла UpdateCommentClassificationAsync, чтобы избежать N+1 контекстов.
+    /// </summary>
+    Task UpdateCommentClassificationBatchAsync(
+        Dictionary<string, ClassifyResult> results, CancellationToken ct = default);
 }
