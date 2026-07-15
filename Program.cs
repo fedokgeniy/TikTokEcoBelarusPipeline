@@ -4,7 +4,8 @@ using TikTokEcoBelarus.Infrastructure.Repositories;
 using TikTokEcoBelarus.Pipeline;
 using TikTokEcoBelarus.Services;
 
-const string apiKey = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
+const string apiKey          = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
+const string anthropicApiKey = ""; // Fallback — set via appsettings.json "Anthropic:ApiKey"
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,7 +16,6 @@ builder.Services.AddRazorComponents()
 // ── БД ──────────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("Default");
 
-// AddDbContextFactory с явным Scoped — без конфликта lifetime
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(connectionString), ServiceLifetime.Scoped);
 
@@ -30,16 +30,21 @@ builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
 builder.Services.AddScoped<ITrackedChannelRepository, TrackedChannelRepository>();
 builder.Services.AddScoped<BelarusEcoScorer>();
 builder.Services.AddScoped<CollectionPipeline>();
-builder.Services.AddScoped<ChannelMonitorPipeline>();
-builder.Services.AddScoped<CommentClassifierService>();
 builder.Services.AddScoped<CsvExportService>();
 
 builder.Services.AddSingleton<TikTokApiClient>(sp =>
 {
-    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var factory    = sp.GetRequiredService<IHttpClientFactory>();
     var httpClient = factory.CreateClient();
     return new TikTokApiClient(httpClient, apiKey);
 });
+
+// CommentClassifierService принимает string — регистрируем через фабрику,
+// ключ берётся из конфига "Anthropic:ApiKey" (или фоллбэк на пустую строку)
+var anthropicKey = builder.Configuration["Anthropic:ApiKey"] ?? anthropicApiKey;
+builder.Services.AddScoped<CommentClassifierService>(_ => new CommentClassifierService(anthropicKey));
+
+builder.Services.AddScoped<ChannelMonitorPipeline>();
 
 var app = builder.Build();
 
