@@ -3,26 +3,42 @@ using TikTokEcoBelarus.Domain.Entities;
 
 namespace TikTokEcoBelarus.Infrastructure.Repositories;
 
-public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelRepository
+/// <summary>
+/// Репозиторий для TrackedChannel и связанных сущностей.
+///
+/// Использует IDbContextFactory вместо прямого инжекта AppDbContext,
+/// чтобы избежать "Cannot access a disposed context instance" —
+/// ChannelMonitorPipeline живёт дольше Scoped-контекста Blazor.
+/// Каждый метод создаёт и уничтожает собственный контекст через using.
+/// </summary>
+public class TrackedChannelRepository(IDbContextFactory<AppDbContext> dbFactory) : ITrackedChannelRepository
 {
-    public Task<List<TrackedChannel>> GetAllAsync()
-        => db.TrackedChannels
-             .OrderBy(c => c.CreatedAt)
-             .Include(c => c.Videos)
-             .ToListAsync();
+    public async Task<List<TrackedChannel>> GetAllAsync()
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.TrackedChannels
+            .OrderBy(c => c.CreatedAt)
+            .Include(c => c.Videos)
+            .ToListAsync();
+    }
 
-    public Task<TrackedChannel?> GetByUniqueIdAsync(string uniqueId)
-        => db.TrackedChannels
-             .FirstOrDefaultAsync(c => c.UniqueId == uniqueId);
+    public async Task<TrackedChannel?> GetByUniqueIdAsync(string uniqueId)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.TrackedChannels
+            .FirstOrDefaultAsync(c => c.UniqueId == uniqueId);
+    }
 
     public async Task AddAsync(TrackedChannel channel)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         db.TrackedChannels.Add(channel);
         await db.SaveChangesAsync();
     }
 
     public async Task DeleteAsync(Guid id)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         var ch = await db.TrackedChannels.FindAsync(id);
         if (ch is null) return;
         db.TrackedChannels.Remove(ch);
@@ -32,6 +48,7 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
     /// <summary>Обновляет метаданные: UserId, ProfileUrl, DisplayName, AvatarUrl.</summary>
     public async Task SaveMetaAsync(TrackedChannel channel)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         await db.TrackedChannels
             .Where(c => c.Id == channel.Id)
             .ExecuteUpdateAsync(s => s
@@ -44,6 +61,7 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
     public async Task UpdateAfterCheckAsync(
         Guid id, int videoCount, int commentCount, DateTimeOffset checkedAt)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         await db.TrackedChannels
             .Where(c => c.Id == id)
             .ExecuteUpdateAsync(s => s
@@ -54,6 +72,7 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
 
     public async Task SaveVideosAsync(Guid channelId, List<TrackedChannelVideo> videos)
     {
+        await using var db = await dbFactory.CreateDbContextAsync();
         var existingIds = await db.TrackedChannelVideos
             .Where(v => v.TrackedChannelId == channelId)
             .Select(v => v.VideoId)
@@ -73,11 +92,14 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
     /// Возвращает HashSet уже сохранённых VideoId для канала.
     /// Используется в ChannelMonitorPipeline для delta-фильтрации.
     /// </summary>
-    public Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId)
-        => db.TrackedChannelVideos
-             .Where(v => v.TrackedChannelId == channelId)
-             .Select(v => v.VideoId)
-             .ToHashSetAsync();
+    public async Task<HashSet<string>> GetExistingVideoIdsAsync(Guid channelId)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync();
+        return await db.TrackedChannelVideos
+            .Where(v => v.TrackedChannelId == channelId)
+            .Select(v => v.VideoId)
+            .ToHashSetAsync();
+    }
 
     /// <summary>
     /// Сохраняет комментарии, пропуская дубликаты по CommentId.
@@ -87,6 +109,7 @@ public class TrackedChannelRepository(AppDbContext db) : ITrackedChannelReposito
         var list = comments.ToList();
         if (list.Count == 0) return;
 
+        await using var db = await dbFactory.CreateDbContextAsync();
         var incomingIds  = list.Select(c => c.CommentId).ToList();
         var existingKeys = await db.VideoComments
             .Where(c => incomingIds.Contains(c.CommentId))
