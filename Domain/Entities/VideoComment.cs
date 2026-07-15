@@ -14,9 +14,15 @@ public class VideoComment
 
     // --- AI classification ---
     /// <summary>null = not yet classified, true = relevant, false = not relevant.</summary>
-    public bool?   IsRelevant      { get; set; }
+    public bool?   IsRelevant  { get; set; }
+    /// <summary>AI relevance score 0-100.</summary>
+    public int?    Score       { get; set; }
+    /// <summary>Category string returned by Claude, e.g. "ecology", "spam".</summary>
+    public string? Category    { get; set; }
+    /// <summary>Whether Claude recommends replying to this comment.</summary>
+    public bool?   ShouldReply { get; set; }
     /// <summary>Comma-separated tags returned by Claude Haiku, e.g. "pollution,river".</summary>
-    public string? Tags            { get; set; }
+    public string? Tags        { get; set; }
 
     public TrackedChannelVideo Video { get; set; } = null!;
 }

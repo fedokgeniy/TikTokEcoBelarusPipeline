@@ -7,10 +7,6 @@ using TikTokEcoBelarus.Infrastructure;
 
 namespace TikTokEcoBelarus.Services;
 
-/// <summary>
-/// Классифицирует комментарии через Anthropic Claude.
-/// Ключ, модель и системный промт читаются из БД перед каждым запуском.
-/// </summary>
 public class CommentClassifierService(
     IDbContextFactory<AppDbContext> dbFactory,
     IHttpClientFactory httpClientFactory)
@@ -19,11 +15,9 @@ public class CommentClassifierService(
     private const int    MaxBatchChars = 12_000;
     private const int    MaxTokens     = 1024;
 
-    // AppSettings keys — must match Settings.razor
     private const string KeyApiKey = "anthropic:apiKey";
     private const string KeyModel  = "anthropic:model";
     private const string KeyPrompt = "anthropic:systemPrompt";
-
     private const string DefaultModel = "claude-haiku-4-5";
 
     private const string DefaultSystemPrompt =
@@ -33,20 +27,16 @@ public class CommentClassifierService(
         "Верни ТОЛЬКО JSON-массив, без markdown, без преамбулы.";
 
     // ---------------------------------------------------------------
-    // Public API
-    // ---------------------------------------------------------------
-
-    public async Task<Dictionary<string, (bool IsRelevant, string? Tags)>> ClassifyAsync(
+    public async Task<Dictionary<string, ClassifyResult>> ClassifyAsync(
         IReadOnlyList<VideoComment> comments,
         CancellationToken ct = default)
     {
-        var result = new Dictionary<string, (bool, string?)>();
+        var result = new Dictionary<string, ClassifyResult>();
         if (comments.Count == 0) return result;
 
-        // --- Read settings from DB at runtime ---
-        await using var db   = await dbFactory.CreateDbContextAsync(ct);
-        var keys             = new[] { KeyApiKey, KeyModel, KeyPrompt };
-        var settings         = await db.AppSettings
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var keys           = new[] { KeyApiKey, KeyModel, KeyPrompt };
+        var settings       = await db.AppSettings
             .Where(s => keys.Contains(s.Key))
             .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
 
@@ -56,9 +46,7 @@ public class CommentClassifierService(
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            Console.Error.WriteLine(
-                "[CLASSIFIER] Anthropic API key is empty. " +
-                "Установите ключ в разделе Настройки (вкладка Settings).");
+            Console.Error.WriteLine("[CLASSIFIER] Anthropic API key is empty. Установите ключ в разделе Settings.");
             return result;
         }
 
@@ -80,46 +68,33 @@ public class CommentClassifierService(
     }
 
     // ---------------------------------------------------------------
-    // Private helpers
-    // ---------------------------------------------------------------
-
     private static List<List<VideoComment>> BuildBatches(IReadOnlyList<VideoComment> comments)
     {
         var batches = new List<List<VideoComment>>();
         var current = new List<VideoComment>();
-        int currentChars = 0;
+        int chars   = 0;
 
         foreach (var c in comments)
         {
-            int entryLen = c.CommentId.Length + c.Text.Length + 20;
-
-            if (current.Count > 0 && currentChars + entryLen > MaxBatchChars)
+            int len = c.CommentId.Length + c.Text.Length + 20;
+            if (current.Count > 0 && chars + len > MaxBatchChars)
             {
                 batches.Add(current);
-                current      = [];
-                currentChars = 0;
+                current = [];
+                chars   = 0;
             }
-
             current.Add(c);
-            currentChars += entryLen;
+            chars += len;
         }
-
-        if (current.Count > 0)
-            batches.Add(current);
-
+        if (current.Count > 0) batches.Add(current);
         return batches;
     }
 
-    private async Task<Dictionary<string, (bool IsRelevant, string? Tags)>> ClassifyBatchAsync(
-        List<VideoComment> batch,
-        string apiKey,
-        string model,
-        string systemPrompt,
-        CancellationToken ct)
+    private async Task<Dictionary<string, ClassifyResult>> ClassifyBatchAsync(
+        List<VideoComment> batch, string apiKey, string model, string systemPrompt, CancellationToken ct)
     {
-        var inputArray  = batch.Select(c => new { cid = c.CommentId, text = c.Text }).ToList();
+        var inputArray  = batch.Select(c => new { cid = c.CommentId, text = c.Text });
         var userMessage = JsonSerializer.Serialize(inputArray);
-
         var requestBody = new
         {
             model,
@@ -128,95 +103,85 @@ public class CommentClassifierService(
             messages   = new[] { new { role = "user", content = userMessage } }
         };
 
-        var json    = JsonSerializer.Serialize(requestBody);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        var content = new StringContent(
+            JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
 
-        // Build a fresh HttpClient per batch so the API key is always current
         using var http = httpClientFactory.CreateClient();
-        http.DefaultRequestHeaders.Add("x-api-key",          apiKey);
-        http.DefaultRequestHeaders.Add("anthropic-version",  "2023-06-01");
+        http.DefaultRequestHeaders.Add("x-api-key",         apiKey);
+        http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
 
         Console.WriteLine($"[CLASSIFIER] Sending batch of {batch.Count} comments to {model}...");
 
         HttpResponseMessage response;
-        try
-        {
-            response = await http.PostAsync(ApiUrl, content, ct);
-        }
+        try   { response = await http.PostAsync(ApiUrl, content, ct); }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[CLASSIFIER HTTP ERROR] {ex.Message}");
             return new();
         }
 
-        var responseBody = await response.Content.ReadAsStringAsync(ct);
-
+        var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
         {
             Console.Error.WriteLine(
-                $"[CLASSIFIER] HTTP {(int)response.StatusCode}: " +
-                responseBody[..Math.Min(500, responseBody.Length)]);
+                $"[CLASSIFIER] HTTP {(int)response.StatusCode}: {body[..Math.Min(500, body.Length)]}");
             return new();
         }
 
-        return ParseResponse(responseBody);
+        return ParseResponse(body);
     }
 
-    private static Dictionary<string, (bool IsRelevant, string? Tags)> ParseResponse(string responseBody)
+    private static Dictionary<string, ClassifyResult> ParseResponse(string body)
     {
-        var result = new Dictionary<string, (bool, string?)>();
+        var result = new Dictionary<string, ClassifyResult>();
         try
         {
-            var doc = JsonDocument.Parse(responseBody);
-            if (!doc.RootElement.TryGetProperty("content", out var contentArr)
-             || contentArr.ValueKind != JsonValueKind.Array)
-                return result;
+            var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("content", out var arr)
+             || arr.ValueKind != JsonValueKind.Array) return result;
 
             string? rawText = null;
-            foreach (var block in contentArr.EnumerateArray())
+            foreach (var block in arr.EnumerateArray())
             {
-                if (block.TryGetProperty("type", out var typeEl) && typeEl.GetString() == "text"
-                 && block.TryGetProperty("text", out var textEl))
-                { rawText = textEl.GetString(); break; }
+                if (block.TryGetProperty("type", out var t) && t.GetString() == "text"
+                 && block.TryGetProperty("text", out var tx))
+                { rawText = tx.GetString(); break; }
             }
 
-            if (string.IsNullOrWhiteSpace(rawText))
-            {
-                Console.Error.WriteLine("[CLASSIFIER PARSE] Empty text block.");
-                return result;
-            }
+            if (string.IsNullOrWhiteSpace(rawText)) return result;
 
             int start = rawText.IndexOf('[');
             int end   = rawText.LastIndexOf(']');
-            if (start < 0 || end <= start)
-            {
-                Console.Error.WriteLine($"[CLASSIFIER PARSE] No JSON array in: {rawText[..Math.Min(300, rawText.Length)]}");
-                return result;
-            }
+            if (start < 0 || end <= start) return result;
 
             foreach (var item in JsonDocument.Parse(rawText[start..(end + 1)]).RootElement.EnumerateArray())
             {
-                string? cid  = item.TryGetProperty("cid",      out var cidEl)  ? cidEl.GetString()   : null;
-                // Support both old schema (relevant) and new schema (score >= 70)
+                string? cid      = item.TryGetProperty("cid",      out var cidEl)  ? cidEl.GetString()       : null;
+                string? category = item.TryGetProperty("category", out var catEl)  ? catEl.GetString()       : null;
+                bool shouldReply = item.TryGetProperty("shouldReply", out var srEl) && srEl.GetBoolean();
+
+                int score = 0;
+                if (item.TryGetProperty("score", out var scEl) && scEl.ValueKind == JsonValueKind.Number)
+                    score = scEl.GetInt32();
+
                 bool relevant;
-                if (item.TryGetProperty("score", out var scoreEl) && scoreEl.ValueKind == JsonValueKind.Number)
-                    relevant = scoreEl.GetInt32() >= 70;
+                if (item.TryGetProperty("score", out var s2) && s2.ValueKind == JsonValueKind.Number)
+                    relevant = s2.GetInt32() >= 70;
                 else
                     relevant = item.TryGetProperty("relevant", out var relEl) && relEl.GetBoolean();
 
                 string? tags = null;
                 if (item.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
                 {
-                    var tagList = tagsEl.EnumerateArray()
+                    var list = tagsEl.EnumerateArray()
                         .Select(t => t.GetString())
                         .Where(t => !string.IsNullOrWhiteSpace(t))
                         .ToList();
-                    if (tagList.Count > 0)
-                        tags = string.Join(",", tagList);
+                    if (list.Count > 0) tags = string.Join(",", list);
                 }
 
                 if (cid is not null)
-                    result[cid] = (relevant, tags);
+                    result[cid] = new ClassifyResult(relevant, score, category, shouldReply, tags);
             }
 
             Console.WriteLine($"[CLASSIFIER PARSE] Parsed {result.Count} result(s).");
@@ -228,3 +193,11 @@ public class CommentClassifierService(
         return result;
     }
 }
+
+/// <summary>Full result from Claude for one comment.</summary>
+public record ClassifyResult(
+    bool    IsRelevant,
+    int     Score,
+    string? Category,
+    bool    ShouldReply,
+    string? Tags);
