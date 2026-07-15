@@ -12,8 +12,8 @@ public class CommentClassifierService(
     IHttpClientFactory httpClientFactory)
 {
     private const string ApiUrl        = "https://api.anthropic.com/v1/messages";
-    private const int    MaxBatchChars = 12_000;
-    private const int    MaxTokens     = 1024;
+    private const int    MaxBatchChars = 6_000;
+    private const int    MaxTokens     = 8192;
 
     private const string KeyApiKey = "anthropic:apiKey";
     private const string KeyModel  = "anthropic:model";
@@ -189,6 +189,7 @@ public class CommentClassifierService(
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[CLASSIFIER PARSE ERROR] {ex.Message}");
+            Console.Error.WriteLine($"[CLASSIFIER PARSE ERROR] rawText snippet: {body[..Math.Min(300, body.Length)]}");
         }
         return result;
     }
