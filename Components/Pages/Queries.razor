@@ -53,7 +53,7 @@
 }
 else
 {
-    <div class="d-flex gap-2 mb-2">
+    <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
         <button class="btn btn-sm btn-outline-secondary" @onclick="DisableAllAsync"
                 disabled="@(_queries.All(q => !q.IsActive))">
             ⏸ Отключить все
@@ -62,6 +62,21 @@ else
                 disabled="@(_queries.All(q => q.IsActive))">
             ▶ Включить все
         </button>
+
+        <!-- Массовая установка DateFrom -->
+        <div class="d-flex gap-1 align-items-center ms-auto">
+            <label class="small text-muted mb-0 me-1">Дата для всех:</label>
+            <input type="date" class="form-control form-control-sm" style="width:150px"
+                   @bind="_bulkDateFrom" />
+            <button class="btn btn-sm btn-outline-warning" @onclick="SetDateAllAsync"
+                    disabled="@(_bulkDateFrom == null)">
+                🗓 Применить ко всем
+            </button>
+            <button class="btn btn-sm btn-outline-danger" @onclick="ClearDateAllAsync"
+                    disabled="@(_queries.All(q => q.DateFrom == null))">
+                ✕ Сбросить даты
+            </button>
+        </div>
     </div>
 
     <table class="table table-sm table-hover">
@@ -109,9 +124,10 @@ else
     List<SearchQuery> _queries = [];
     bool _loading = true;
 
-    string    _newType    = "hashtag";
-    string    _newValue   = "";
+    string    _newType     = "hashtag";
+    string    _newValue    = "";
     DateTime? _newDateFrom;
+    DateTime? _bulkDateFrom;
 
     string? _importMsg   = null;
     bool    _importError = false;
@@ -160,8 +176,25 @@ else
 
     async Task UpdateDateFrom(SearchQuery q, string? value)
     {
-        // Fix: always store UTC to avoid Kind=Unspecified PostgreSQL error
         q.DateFrom = ParseDateUtc(value);
+        await Db.SaveChangesAsync();
+    }
+
+    /// <summary>Sets DateFrom = _bulkDateFrom (UTC) for every query in the list.</summary>
+    async Task SetDateAllAsync()
+    {
+        if (_bulkDateFrom == null) return;
+        var utcDate = DateTime.SpecifyKind(_bulkDateFrom.Value, DateTimeKind.Utc);
+        foreach (var q in _queries)
+            q.DateFrom = utcDate;
+        await Db.SaveChangesAsync();
+    }
+
+    /// <summary>Clears DateFrom for all queries.</summary>
+    async Task ClearDateAllAsync()
+    {
+        foreach (var q in _queries)
+            q.DateFrom = null;
         await Db.SaveChangesAsync();
     }
 
@@ -169,7 +202,6 @@ else
     {
         if (string.IsNullOrWhiteSpace(_newValue)) return;
 
-        // Fix: normalise _newDateFrom to UTC before inserting into DB
         var dateFromUtc = _newDateFrom.HasValue
             ? DateTime.SpecifyKind(_newDateFrom.Value, DateTimeKind.Utc)
             : (DateTime?)null;
@@ -235,7 +267,6 @@ else
                 {
                     QueryType = dto.QueryType,
                     Value     = dto.Value,
-                    // Fix: parse JSON dates as UTC to avoid Kind=Unspecified PostgreSQL error
                     DateFrom  = ParseDateUtc(dto.DateFrom),
                     Priority  = dto.Priority > 0 ? dto.Priority : priority,
                     IsActive  = dto.IsActive
