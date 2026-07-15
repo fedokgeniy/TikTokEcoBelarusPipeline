@@ -4,26 +4,25 @@ using TikTokEcoBelarus.Infrastructure.Repositories;
 using TikTokEcoBelarus.Pipeline;
 using TikTokEcoBelarus.Services;
 
-const string apiKey          = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
-const string anthropicApiKey = ""; // Fallback — set via appsettings.json "Anthropic:ApiKey"
+const string apiKey = "02e437b294msh2835a963405c6f2p1bc888jsn6ec318a971d0";
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Blazor Server ─────────────────────────────────────────────
+// ── Blazor Server ──────────────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// ── БД ──────────────────────────────────────────────────────
+// ── БД ─────────────────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("Default");
 
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(connectionString), ServiceLifetime.Scoped);
 
-// ── Кэш и HTTP ────────────────────────────────────────────
+// ── Кэш и HTTP ─────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 
-// ── Репозитории и сервисы ──────────────────────────────────
+// ── Репозитории и сервисы ──────────────────────────────────────────────────
 builder.Services.AddSingleton<PipelineOrchestrator>();
 builder.Services.AddScoped<IScoringRuleRepository, ScoringRuleRepository>();
 builder.Services.AddScoped<ISearchQueryRepository, SearchQueryRepository>();
@@ -39,16 +38,15 @@ builder.Services.AddSingleton<TikTokApiClient>(sp =>
     return new TikTokApiClient(httpClient, apiKey);
 });
 
-// CommentClassifierService принимает string — регистрируем через фабрику,
-// ключ берётся из конфига "Anthropic:ApiKey" (или фоллбэк на пустую строку)
-var anthropicKey = builder.Configuration["Anthropic:ApiKey"] ?? anthropicApiKey;
-builder.Services.AddScoped<CommentClassifierService>(_ => new CommentClassifierService(anthropicKey));
+// CommentClassifierService читает ключ, модель и промт из БД при каждом запросе
+// (не из appsettings.json и не при старте)
+builder.Services.AddScoped<CommentClassifierService>();
 
 builder.Services.AddScoped<ChannelMonitorPipeline>();
 
 var app = builder.Build();
 
-// ── Seed ──────────────────────────────────────────────────────
+// ── Seed ──────────────────────────────────────────────────────────────
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -56,7 +54,7 @@ using (var scope = app.Services.CreateScope())
     await SeedData.SeedAsync(db);
 }
 
-// ── Middleware ─────────────────────────────────────────────────
+// ── Middleware ─────────────────────────────────────────────────────────────
 app.UseStaticFiles();
 app.UseAntiforgery();
 

@@ -1,50 +1,41 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using TikTokEcoBelarus.Domain.Entities;
+using TikTokEcoBelarus.Infrastructure;
 
 namespace TikTokEcoBelarus.Services;
 
 /// <summary>
-/// Классифицирует комментарии к видео с помощью Claude Haiku (Anthropic API).
-///
-/// Алгоритм:
-///   1. Формирует батчи комментариев, каждый батч ≤ MaxBatchChars символов.
-///   2. Отправляет батч в Haiku с системным промптом на экологическую тематику Беларуси.
-///   3. Парсит ответ — массив JSON: [{"cid":"...","relevant":true,"tags":[...]},...]
-///   4. Возвращает словарь cid → (isRelevant, tags).
+/// Классифицирует комментарии через Anthropic Claude.
+/// Ключ, модель и системный промт читаются из БД перед каждым запуском.
 /// </summary>
-public class CommentClassifierService
+public class CommentClassifierService(
+    IDbContextFactory<AppDbContext> dbFactory,
+    IHttpClientFactory httpClientFactory)
 {
-    private readonly HttpClient _http;
-    private readonly string     _apiKey;
-
     private const string ApiUrl        = "https://api.anthropic.com/v1/messages";
-    private const string Model         = "claude-haiku-4-5";
-    private const int    MaxBatchChars = 12_000;  // ~3k tokens — безопасный предел для Haiku
+    private const int    MaxBatchChars = 12_000;
     private const int    MaxTokens     = 1024;
 
-    private static readonly string SystemPrompt =
-        "Ты — аналитик экологических данных. " +
-        "Тебе дают список комментариев из TikTok к видео об экологии Беларуси. " +
-        "Для каждого комментария определи: релевантен ли он экологической повестке Беларуси (загрязнение, " +
-        "природа, экология, реки, леса, воздух, отходы, климат, протесты, экоактивизм и т.п.). " +
-        "Верни ТОЛЬКО JSON-массив, без пояснений, без markdown. " +
-        "Формат каждого элемента: {\"cid\":\"<id>\",\"relevant\":<true|false>,\"tags\":[\"tag1\",\"tag2\"]}. " +
-        "Если комментарий нерелевантен — tags пустой массив. Теги на английском, строчными.";
+    // AppSettings keys — must match Settings.razor
+    private const string KeyApiKey = "anthropic:apiKey";
+    private const string KeyModel  = "anthropic:model";
+    private const string KeyPrompt = "anthropic:systemPrompt";
 
-    public CommentClassifierService(string anthropicApiKey)
-    {
-        _apiKey = anthropicApiKey;
-        _http   = new HttpClient();
-        _http.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-        _http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-    }
+    private const string DefaultModel = "claude-haiku-4-5";
 
-    /// <summary>
-    /// Классифицирует список комментариев батчами.
-    /// Возвращает словарь: CommentId → (IsRelevant, Tags-через-запятую).
-    /// </summary>
+    private const string DefaultSystemPrompt =
+        "Ты — классификатор комментариев для экологической горячей линии «Зелёный телефон» (Беларусь). " +
+        "Для КАЖДОГО комментария верни JSON-объект: " +
+        "{\"cid\":\"<id>\",\"score\":<0-100>,\"category\":\"<категория>\",\"shouldReply\":<true|false>,\"tags\":[...]}. " +
+        "Верни ТОЛЬКО JSON-массив, без markdown, без преамбулы.";
+
+    // ---------------------------------------------------------------
+    // Public API
+    // ---------------------------------------------------------------
+
     public async Task<Dictionary<string, (bool IsRelevant, string? Tags)>> ClassifyAsync(
         IReadOnlyList<VideoComment> comments,
         CancellationToken ct = default)
@@ -52,18 +43,37 @@ public class CommentClassifierService
         var result = new Dictionary<string, (bool, string?)>();
         if (comments.Count == 0) return result;
 
+        // --- Read settings from DB at runtime ---
+        await using var db   = await dbFactory.CreateDbContextAsync(ct);
+        var keys             = new[] { KeyApiKey, KeyModel, KeyPrompt };
+        var settings         = await db.AppSettings
+            .Where(s => keys.Contains(s.Key))
+            .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
+
+        var apiKey       = settings.TryGetValue(KeyApiKey, out var k) ? k.Trim() : "";
+        var model        = settings.TryGetValue(KeyModel,  out var m) ? m.Trim() : DefaultModel;
+        var systemPrompt = settings.TryGetValue(KeyPrompt, out var p) ? p.Trim() : DefaultSystemPrompt;
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            Console.Error.WriteLine(
+                "[CLASSIFIER] Anthropic API key is empty. " +
+                "Установите ключ в разделе Настройки (вкладка Settings).");
+            return result;
+        }
+
         var batches = BuildBatches(comments);
-        Console.WriteLine($"[CLASSIFIER] {comments.Count} comments → {batches.Count} batch(es)");
+        Console.WriteLine($"[CLASSIFIER] {comments.Count} comments → {batches.Count} batch(es), model={model}");
 
         foreach (var batch in batches)
         {
             ct.ThrowIfCancellationRequested();
-            var batchResult = await ClassifyBatchAsync(batch, ct);
+            var batchResult = await ClassifyBatchAsync(batch, apiKey, model, systemPrompt, ct);
             foreach (var kv in batchResult)
                 result[kv.Key] = kv.Value;
 
             if (batches.Count > 1)
-                await Task.Delay(500, ct); // rate-limit guard
+                await Task.Delay(500, ct);
         }
 
         return result;
@@ -81,13 +91,12 @@ public class CommentClassifierService
 
         foreach (var c in comments)
         {
-            // JSON entry approximation: {"cid":"<id>","text":"<text>"}
             int entryLen = c.CommentId.Length + c.Text.Length + 20;
 
             if (current.Count > 0 && currentChars + entryLen > MaxBatchChars)
             {
                 batches.Add(current);
-                current      = new List<VideoComment>();
+                current      = [];
                 currentChars = 0;
             }
 
@@ -103,32 +112,36 @@ public class CommentClassifierService
 
     private async Task<Dictionary<string, (bool IsRelevant, string? Tags)>> ClassifyBatchAsync(
         List<VideoComment> batch,
+        string apiKey,
+        string model,
+        string systemPrompt,
         CancellationToken ct)
     {
-        // Строим user-message: компактный JSON-массив комментариев
-        var inputArray = batch.Select(c => new { cid = c.CommentId, text = c.Text }).ToList();
+        var inputArray  = batch.Select(c => new { cid = c.CommentId, text = c.Text }).ToList();
         var userMessage = JsonSerializer.Serialize(inputArray);
 
         var requestBody = new
         {
-            model      = Model,
+            model,
             max_tokens = MaxTokens,
-            system     = SystemPrompt,
-            messages   = new[]
-            {
-                new { role = "user", content = userMessage }
-            }
+            system     = systemPrompt,
+            messages   = new[] { new { role = "user", content = userMessage } }
         };
 
         var json    = JsonSerializer.Serialize(requestBody);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        Console.WriteLine($"[CLASSIFIER] Sending batch of {batch.Count} comments to Haiku...");
+        // Build a fresh HttpClient per batch so the API key is always current
+        using var http = httpClientFactory.CreateClient();
+        http.DefaultRequestHeaders.Add("x-api-key",          apiKey);
+        http.DefaultRequestHeaders.Add("anthropic-version",  "2023-06-01");
+
+        Console.WriteLine($"[CLASSIFIER] Sending batch of {batch.Count} comments to {model}...");
 
         HttpResponseMessage response;
         try
         {
-            response = await _http.PostAsync(ApiUrl, content, ct);
+            response = await http.PostAsync(ApiUrl, content, ct);
         }
         catch (Exception ex)
         {
@@ -140,63 +153,59 @@ public class CommentClassifierService
 
         if (!response.IsSuccessStatusCode)
         {
-            Console.Error.WriteLine($"[CLASSIFIER] HTTP {(int)response.StatusCode}: {responseBody[..Math.Min(500, responseBody.Length)]}");
+            Console.Error.WriteLine(
+                $"[CLASSIFIER] HTTP {(int)response.StatusCode}: " +
+                responseBody[..Math.Min(500, responseBody.Length)]);
             return new();
         }
 
-        return ParseHaikuResponse(responseBody);
+        return ParseResponse(responseBody);
     }
 
-    private static Dictionary<string, (bool IsRelevant, string? Tags)> ParseHaikuResponse(string responseBody)
+    private static Dictionary<string, (bool IsRelevant, string? Tags)> ParseResponse(string responseBody)
     {
         var result = new Dictionary<string, (bool, string?)>();
-
         try
         {
-            var doc  = JsonDocument.Parse(responseBody);
-            var root = doc.RootElement;
-
-            // Anthropic response: { "content": [{ "type": "text", "text": "[...]" }] }
-            if (!root.TryGetProperty("content", out var contentArr)
+            var doc = JsonDocument.Parse(responseBody);
+            if (!doc.RootElement.TryGetProperty("content", out var contentArr)
              || contentArr.ValueKind != JsonValueKind.Array)
                 return result;
 
             string? rawText = null;
             foreach (var block in contentArr.EnumerateArray())
             {
-                if (block.TryGetProperty("type",  out var typeEl) && typeEl.GetString() == "text"
-                 && block.TryGetProperty("text",  out var textEl))
-                {
-                    rawText = textEl.GetString();
-                    break;
-                }
+                if (block.TryGetProperty("type", out var typeEl) && typeEl.GetString() == "text"
+                 && block.TryGetProperty("text", out var textEl))
+                { rawText = textEl.GetString(); break; }
             }
 
             if (string.IsNullOrWhiteSpace(rawText))
             {
-                Console.Error.WriteLine("[CLASSIFIER PARSE] Empty text block in Haiku response.");
+                Console.Error.WriteLine("[CLASSIFIER PARSE] Empty text block.");
                 return result;
             }
 
-            // Найти первый '[' — модель иногда добавляет преамбулу
             int start = rawText.IndexOf('[');
             int end   = rawText.LastIndexOf(']');
-            if (start < 0 || end < 0 || end <= start)
+            if (start < 0 || end <= start)
             {
-                Console.Error.WriteLine($"[CLASSIFIER PARSE] No JSON array found in: {rawText[..Math.Min(300, rawText.Length)]}");
+                Console.Error.WriteLine($"[CLASSIFIER PARSE] No JSON array in: {rawText[..Math.Min(300, rawText.Length)]}");
                 return result;
             }
 
-            var jsonArray = JsonDocument.Parse(rawText[start..(end + 1)]);
-
-            foreach (var item in jsonArray.RootElement.EnumerateArray())
+            foreach (var item in JsonDocument.Parse(rawText[start..(end + 1)]).RootElement.EnumerateArray())
             {
-                string? cid       = item.TryGetProperty("cid",      out var cidEl)  ? cidEl.GetString()  : null;
-                bool    relevant  = item.TryGetProperty("relevant", out var relEl)  && relEl.GetBoolean();
+                string? cid  = item.TryGetProperty("cid",      out var cidEl)  ? cidEl.GetString()   : null;
+                // Support both old schema (relevant) and new schema (score >= 70)
+                bool relevant;
+                if (item.TryGetProperty("score", out var scoreEl) && scoreEl.ValueKind == JsonValueKind.Number)
+                    relevant = scoreEl.GetInt32() >= 70;
+                else
+                    relevant = item.TryGetProperty("relevant", out var relEl) && relEl.GetBoolean();
 
                 string? tags = null;
-                if (item.TryGetProperty("tags", out var tagsEl)
-                 && tagsEl.ValueKind == JsonValueKind.Array)
+                if (item.TryGetProperty("tags", out var tagsEl) && tagsEl.ValueKind == JsonValueKind.Array)
                 {
                     var tagList = tagsEl.EnumerateArray()
                         .Select(t => t.GetString())
@@ -210,13 +219,12 @@ public class CommentClassifierService
                     result[cid] = (relevant, tags);
             }
 
-            Console.WriteLine($"[CLASSIFIER PARSE] Parsed {result.Count} result(s) from Haiku.");
+            Console.WriteLine($"[CLASSIFIER PARSE] Parsed {result.Count} result(s).");
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[CLASSIFIER PARSE ERROR] {ex.Message}");
         }
-
         return result;
     }
 }
