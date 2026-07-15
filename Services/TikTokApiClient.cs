@@ -40,18 +40,20 @@ public class TikTokApiClient
             var statsNode    = userInfoNode.GetProperty("stats");
             var userNode     = userInfoNode.GetProperty("user");
 
-            int    videoCount   = statsNode.GetProperty("videoCount").GetInt32();
-            string? userId      = userNode.TryGetProperty("id",       out var idEl) ? idEl.GetString()  : null;
-            string? nickname    = userNode.TryGetProperty("nickname",  out var nnEl) ? nnEl.GetString()  : null;
-            string? avatarThumb = TryGetFirstUrl(userNode, "avatarThumb");
-            string  profileUrl  = $"https://www.tiktok.com/@{uniqueId}";
+            int     videoCount   = statsNode.GetProperty("videoCount").GetInt32();
+            string? userId       = userNode.TryGetProperty("id",       out var idEl)     ? idEl.GetString()     : null;
+            string? secUid       = userNode.TryGetProperty("secUid",   out var secUidEl) ? secUidEl.GetString() : null;
+            string? nickname     = userNode.TryGetProperty("nickname",  out var nnEl)     ? nnEl.GetString()     : null;
+            string? avatarThumb  = TryGetFirstUrl(userNode, "avatarThumb");
+            string  profileUrl   = $"https://www.tiktok.com/@{uniqueId}";
 
-            Console.WriteLine($"[USER INFO] @{uniqueId} uid={userId} videos={videoCount}");
+            Console.WriteLine($"[USER INFO] @{uniqueId} uid={userId} secUid={secUid?[..Math.Min(20, secUid?.Length ?? 0)]}... videos={videoCount}");
 
             return new TikTokUserInfo
             {
                 UniqueId    = uniqueId,
                 UserId      = userId,
+                SecUid      = secUid,
                 Nickname    = nickname,
                 AvatarThumb = avatarThumb,
                 ProfileUrl  = profileUrl,
@@ -84,8 +86,9 @@ public class TikTokApiClient
             var doc      = JsonDocument.Parse(body);
             var userNode = doc.RootElement.GetProperty("user");
 
-            string? uniqueId    = userNode.TryGetProperty("unique_id", out var uidEl) ? uidEl.GetString() : null;
-            string? nickname    = userNode.TryGetProperty("nickname",  out var nnEl)  ? nnEl.GetString()  : null;
+            string? uniqueId    = userNode.TryGetProperty("unique_id", out var uidEl)    ? uidEl.GetString()    : null;
+            string? secUid      = userNode.TryGetProperty("secUid",    out var secUidEl) ? secUidEl.GetString() : null;
+            string? nickname    = userNode.TryGetProperty("nickname",  out var nnEl)     ? nnEl.GetString()     : null;
             string? avatarThumb = TryGetFirstJpegUrl(userNode, "avatar_thumb");
 
             string? profileUrl = null;
@@ -99,6 +102,7 @@ public class TikTokApiClient
             {
                 UniqueId    = uniqueId ?? userId,
                 UserId      = userId,
+                SecUid      = secUid,
                 Nickname    = nickname,
                 AvatarThumb = avatarThumb,
                 ProfileUrl  = profileUrl,
@@ -148,7 +152,6 @@ public class TikTokApiClient
                 var doc  = JsonDocument.Parse(body);
                 var root = doc.RootElement;
 
-                // API возвращает { followings: [...], minTime: N, total: N }
                 if (!root.TryGetProperty("followings", out var followingsArr)
                  || followingsArr.ValueKind != JsonValueKind.Array)
                 {
@@ -162,14 +165,11 @@ public class TikTokApiClient
                     if (result.Count >= maxCount) break;
 
                     string? uniqueId = null;
-                    if (u.TryGetProperty("uniqueId", out var uEl)) uniqueId = uEl.GetString();
+                    if (u.TryGetProperty("uniqueId",  out var uEl))  uniqueId = uEl.GetString();
                     else if (u.TryGetProperty("unique_id", out var u2El)) uniqueId = u2El.GetString();
 
-                    string? nickname = null;
-                    if (u.TryGetProperty("nickname", out var nnEl)) nickname = nnEl.GetString();
-
-                    string? secUidUser = null;
-                    if (u.TryGetProperty("secUid", out var sEl)) secUidUser = sEl.GetString();
+                    string? nickname    = u.TryGetProperty("nickname", out var nnEl) ? nnEl.GetString() : null;
+                    string? secUidUser  = u.TryGetProperty("secUid",   out var sEl)  ? sEl.GetString()  : null;
 
                     if (string.IsNullOrWhiteSpace(uniqueId)) continue;
 
@@ -184,13 +184,12 @@ public class TikTokApiClient
 
                 Console.WriteLine($"[FOLLOWINGS] Добавлено {added}, итого {result.Count}");
 
-                if (added == 0) break; // пустая страница
+                if (added == 0) break;
 
-                // Читаем minTime для следующей страницы
                 if (root.TryGetProperty("minTime", out var minTimeEl) && minTimeEl.GetInt64() > 0)
                     maxTime = (int)minTimeEl.GetInt64();
                 else
-                    break; // больше страниц нет
+                    break;
 
                 await Task.Delay(800, ct);
             }
@@ -208,11 +207,6 @@ public class TikTokApiClient
 
     // ---------------------------------------------------------------
     // GET /api/search/video?keyword=...
-    //
-    // ВАЖНО: tiktok-api23 ВСЕГДА возвращает has_more=0 — это баг API.
-    // Реальный признак конца: пустой ItemList или повторяющиеся items.
-    // Пагинация по offset: 0, +count_items, +count_items, ...
-    // Останавливаемся только если пришёл пустой массив или HTTP-ошибка.
     // ---------------------------------------------------------------
     public async IAsyncEnumerable<TikTokItem> SearchVideosAsync(
         string keyword,
@@ -220,8 +214,8 @@ public class TikTokApiClient
         int delayMs  = 1500,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        int offset = 0;
-        int page   = 0;
+        int offset  = 0;
+        int page    = 0;
         var seenIds = new HashSet<string>();
 
         while (page < maxPages)
@@ -251,11 +245,10 @@ public class TikTokApiClient
 
             if (response?.ItemList is null || response.ItemList.Count == 0)
             {
-                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\" offset={offset}: пустая страница — контент закончился.");
+                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\" offset={offset}: пустая страница.");
                 break;
             }
 
-            // Проверяем дубли: если все id уже видели — API зациклился
             var newItems = response.ItemList
                 .Where(item => seenIds.Add(item.Id))
                 .ToList();
@@ -266,7 +259,7 @@ public class TikTokApiClient
 
             if (newItems.Count == 0)
             {
-                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\": все items повторяются — API вернул дубли, стоп.");
+                Console.WriteLine($"[SEARCH END] keyword=\"{keyword}\": все items повторяются, стоп.");
                 break;
             }
 
@@ -314,10 +307,10 @@ public class TikTokApiClient
 
         foreach (var c in commentsArr.EnumerateArray())
         {
-            string? commentId  = c.TryGetProperty("cid",        out var cidEl)  ? cidEl.GetString()   : null;
-            string? text       = c.TryGetProperty("text",       out var textEl) ? textEl.GetString()  : null;
-            long    likeCount  = c.TryGetProperty("digg_count", out var lkEl)   ? lkEl.GetInt64()    : 0;
-            long    createTime = c.TryGetProperty("create_time",out var ctEl)   ? ctEl.GetInt64()    : 0;
+            string? commentId  = c.TryGetProperty("cid",         out var cidEl)  ? cidEl.GetString()  : null;
+            string? text       = c.TryGetProperty("text",        out var textEl) ? textEl.GetString() : null;
+            long    likeCount  = c.TryGetProperty("digg_count",  out var lkEl)   ? lkEl.GetInt64()   : 0;
+            long    createTime = c.TryGetProperty("create_time", out var ctEl)   ? ctEl.GetInt64()   : 0;
 
             string? authorId = null;
             if (c.TryGetProperty("user", out var userEl))
@@ -370,7 +363,7 @@ public class TikTokApiClient
     private static string? TryGetFirstJpegUrl(JsonElement parent, string propName)
     {
         if (!parent.TryGetProperty(propName, out var obj)) return null;
-        if (!obj.TryGetProperty("url_list", out var list)) return null;
+        if (!obj.TryGetProperty("url_list",  out var list)) return null;
         var urls = list.EnumerateArray().Select(e => e.GetString()).Where(s => s != null).ToList();
         return urls.LastOrDefault();
     }
