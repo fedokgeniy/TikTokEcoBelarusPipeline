@@ -50,15 +50,18 @@
 <div class="card mb-4 p-3">
     <h6>📥 Импортировать подписки аккаунта</h6>
     <p class="text-muted small mb-2">
-        Загружает список аккаунтов, на которые подписан указанный пользователь, и добавляет их как отслеживаемые каналы.
-        <strong>secUid</strong> можно найти через /api/user/info или взять из URL-параметра профиля.
+        Введите <strong>@@username</strong> аккаунта — secUid будет получен автоматически.
+        Все аккаунты из его подписок будут добавлены как отслеживаемые каналы.
     </p>
     <div class="row g-2 align-items-end">
-        <div class="col-md-6">
-            <label class="form-label form-label-sm mb-1">secUid аккаунта-источника</label>
-            <input class="form-control form-control-sm font-monospace"
-                   placeholder="MS4wLjABAAAA..."
-                   @bind="_importSecUid" />
+        <div class="col-md-5">
+            <label class="form-label form-label-sm mb-1">@@username аккаунта-источника</label>
+            <div class="input-group input-group-sm">
+                <span class="input-group-text">@@</span>
+                <input class="form-control form-control-sm"
+                       placeholder="ecobelarus"
+                       @bind="_importUsername" />
+            </div>
         </div>
         <div class="col-md-2">
             <label class="form-label form-label-sm mb-1">Макс. подписок</label>
@@ -75,9 +78,9 @@
         </div>
         <div class="col-md-2">
             <button class="btn btn-sm btn-outline-secondary w-100"
-                    @onclick="SaveImportSecUidAsync"
-                    title="Сохранить secUid в настройки">
-                💾 Сохранить secUid
+                    @onclick="SaveImportUsernameAsync"
+                    title="Сохранить username в настройки">
+                💾 Сохранить
             </button>
         </div>
     </div>
@@ -95,7 +98,7 @@
                 <button class="btn btn-sm btn-success" @onclick="AddAllFollowingsAsync" disabled="@_importing">
                     ✅ Добавить все новые (@_importPreview.Count(u => !_existingUniqueIds.Contains(u.UniqueId)))
                 </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="() => { _importPreview.Clear(); _importMessage = ""; }">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ClearImportPreview">
                     ✕ Сбросить
                 </button>
             </div>
@@ -108,7 +111,7 @@
                         @foreach (var u in _importPreview)
                         {
                             var already = _existingUniqueIds.Contains(u.UniqueId);
-                            <tr class="@(already ? "text-muted" : "")">
+                            <tr class="@(already ? "table-secondary" : "")">
                                 <td>
                                     <a href="https://www.tiktok.com/@@@u.UniqueId" target="_blank" rel="noopener noreferrer">
                                         @@@u.UniqueId
@@ -307,7 +310,7 @@ else
 
 @code {
     // --- Существующие поля ---
-    List<TrackedChannel> _channels = [];
+    List<TrackedChannel> _channels       = [];
     bool   _loading          = true;
     bool   _checking         = false;
     string _newUniqueId      = "";
@@ -320,7 +323,7 @@ else
     bool _commentsLoading = false;
 
     // --- Поля импорта подписок ---
-    string _importSecUid    = "";
+    string _importUsername  = "";   // @username аккаунта-источника
     int    _importMaxCount  = 100;
     bool   _importing       = false;
     string _importMessage   = "";
@@ -330,9 +333,9 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        // Загружаем сохранённый secUid из AppSettings
-        var row = await Db.AppSettings.FindAsync("sourceSecUid");
-        if (row is not null) _importSecUid = row.Value ?? "";
+        // Загружаем сохранённый username из AppSettings
+        var row = await Db.AppSettings.FindAsync("sourceUsername");
+        if (row is not null) _importUsername = row.Value ?? "";
 
         await LoadAsync();
     }
@@ -449,26 +452,32 @@ else
     // Импорт подписок
     // -------------------------------------------------------
 
-    async Task SaveImportSecUidAsync()
+    void ClearImportPreview()
     {
-        var uid = _importSecUid.Trim();
-        if (string.IsNullOrWhiteSpace(uid)) return;
+        _importPreview.Clear();
+        _importMessage = string.Empty;
+    }
 
-        var row = await Db.AppSettings.FindAsync("sourceSecUid");
+    async Task SaveImportUsernameAsync()
+    {
+        var username = _importUsername.Trim().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(username)) return;
+
+        var row = await Db.AppSettings.FindAsync("sourceUsername");
         if (row is null)
         {
             Db.AppSettings.Add(new TikTokEcoBelarus.Domain.Entities.AppSetting
             {
-                Key   = "sourceSecUid",
-                Value = uid
+                Key   = "sourceUsername",
+                Value = username
             });
         }
         else
         {
-            row.Value = uid;
+            row.Value = username;
         }
         await Db.SaveChangesAsync();
-        _importMessage = "✅ secUid сохранён в настройках.";
+        _importMessage = $"✅ @{username} сохранён в настройках.";
         _importSuccess = true;
     }
 
@@ -477,10 +486,10 @@ else
         _importMessage = "";
         _importPreview.Clear();
 
-        var secUid = _importSecUid.Trim();
-        if (string.IsNullOrWhiteSpace(secUid))
+        var username = _importUsername.Trim().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(username))
         {
-            _importMessage = "Укажите secUid аккаунта-источника.";
+            _importMessage = "Укажите @username аккаунта-источника.";
             _importSuccess = false;
             return;
         }
@@ -490,18 +499,35 @@ else
 
         try
         {
-            var followings = await TikTokApi.GetUserFollowingsAsync(secUid, _importMaxCount);
+            // Шаг 1: получаем secUid по username автоматически
+            _importMessage = $"🔍 Получаю secUid для @{username}...";
+            _importSuccess = true;
+            StateHasChanged();
+
+            var userInfo = await TikTokApi.GetUserInfoAsync(username);
+            if (userInfo is null || string.IsNullOrWhiteSpace(userInfo.SecUid))
+            {
+                _importMessage = $"⚠️ Не удалось найти аккаунт @{username}. Проверьте username.";
+                _importSuccess = false;
+                return;
+            }
+
+            // Шаг 2: получаем подписки по secUid
+            _importMessage = $"📥 Загружаю подписки @{username}...";
+            StateHasChanged();
+
+            var followings = await TikTokApi.GetUserFollowingsAsync(userInfo.SecUid, _importMaxCount);
 
             if (followings.Count == 0)
             {
-                _importMessage = "⚠️ Подписки не найдены. Проверьте secUid или доступность аккаунта.";
+                _importMessage = $"⚠️ У @{username} нет подписок или аккаунт закрыт.";
                 _importSuccess = false;
                 return;
             }
 
             _importPreview = followings;
             int newCount   = followings.Count(u => !_existingUniqueIds.Contains(u.UniqueId));
-            _importMessage = $"Найдено {followings.Count} подписок, из них {newCount} новых.";
+            _importMessage = $"Найдено {followings.Count} подписок у @{username}, из них {newCount} новых.";
             _importSuccess = true;
         }
         catch (Exception ex)
@@ -537,7 +563,7 @@ else
         _importPreview.Clear();
         _importMessage = $"✅ Добавлено {added} новых каналов.";
         _importSuccess = true;
-        _importing = false;
+        _importing     = false;
 
         await LoadAsync();
     }
